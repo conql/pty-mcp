@@ -2,6 +2,13 @@
 name = "pty-mcp"
 version = "0.1.0"
 edition = "2024"
+description = "An MCP server for PTY management with SSH connections, remote sessions, file access, and mounts"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/observerw/pty-mcp"
+homepage = "https://github.com/observerw/pty-mcp"
+keywords = ["mcp", "pty", "ssh", "terminal", "remote"]
+categories = ["command-line-utilities", "network-programming", "development-tools"]
 
 [dependencies]
 anyhow = { version = "1.0.102", features = ["backtrace"] }
