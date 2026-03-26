@@ -690,12 +690,7 @@ async fn ssh_exec_runs_shell_snippets_and_session_spawn_keeps_argv_literal() -> 
     wait_for_session_exit(&client, &exec_spawned.session_id).await?;
     let exec_output = read_session_output(&client, &exec_spawned.session_id).await?;
     let home = std::env::var("HOME").expect("HOME should be set for shell execution test");
-    assert!(
-        exec_output
-            .lines
-            .iter()
-            .any(|line| line.text.trim() == home)
-    );
+    assert!(exec_output.lines.lines().any(|line| line.trim() == home));
 
     let argv_spawned = client
         .call_tool(
@@ -717,12 +712,7 @@ async fn ssh_exec_runs_shell_snippets_and_session_spawn_keeps_argv_literal() -> 
 
     wait_for_session_exit(&client, &argv_spawned.session_id).await?;
     let argv_output = read_session_output(&client, &argv_spawned.session_id).await?;
-    assert!(
-        argv_output
-            .lines
-            .iter()
-            .any(|line| line.text.trim() == "$HOME")
-    );
+    assert!(argv_output.lines.lines().any(|line| line.trim() == "$HOME"));
 
     client.cancel().await?;
     server_handle.await??;

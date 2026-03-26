@@ -122,7 +122,7 @@ pub struct PtyReadResponse {
     pub returned: usize,
     pub has_more: bool,
     pub total_lines: usize,
-    pub lines: Vec<PtyReadLine>,
+    pub lines: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -781,6 +781,13 @@ fn read_response_from_page(
     status: SessionStatus,
     page: BufferReadPage,
 ) -> PtyReadResponse {
+    let lines = page
+        .lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
     PtyReadResponse {
         session_id,
         status,
@@ -788,7 +795,7 @@ fn read_response_from_page(
         returned: page.returned,
         has_more: page.has_more,
         total_lines: page.total_lines,
-        lines: output_snapshot_from_page(page).lines,
+        lines,
     }
 }
 

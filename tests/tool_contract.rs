@@ -222,7 +222,7 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
     assert!(spawned.pid.is_some());
 
     let ready = wait_for_read_match(&client, &spawned.session_id, "ready").await?;
-    assert!(ready.lines.iter().any(|line| line.text.contains("ready")));
+    assert!(ready.lines.contains("ready"));
 
     let write_result = client
         .call_tool(
@@ -244,12 +244,7 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
 
     let echoed =
         wait_for_read_match(&client, &write_payload.session_id, "echo:hello from tool").await?;
-    assert!(
-        echoed
-            .lines
-            .iter()
-            .any(|line| line.text.contains("echo:hello from tool"))
-    );
+    assert!(echoed.lines.contains("echo:hello from tool"));
 
     let list_result = client
         .call_tool(CallToolRequestParams::new("pty_list"))
@@ -603,10 +598,10 @@ async fn wait_for_read_match(
                     .expect("read args object")
                     .clone(),
                 ),
-            )
+        )
             .await?;
         let payload = result.into_typed::<PtyReadResponse>()?;
-        if payload.lines.iter().any(|line| line.text.contains(needle)) {
+        if payload.lines.contains(needle) {
             return Ok(payload);
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
