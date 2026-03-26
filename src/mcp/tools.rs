@@ -72,6 +72,7 @@ pub struct PtySpawnResponse {
 pub struct PtyWriteRequest {
     pub session_id: SessionId,
     pub data: String,
+    #[schemars(description = "Write mode. Allowed values: plain | escaped. Default: plain.")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<WriteMode>,
 }
@@ -142,6 +143,7 @@ pub struct SshConnectRequest {
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_path: Option<String>,
+    #[schemars(description = "Authentication mode. Allowed values: agent | key | password. Default: auto-detect from local SSH configuration.")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_kind: Option<SshAuthKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -228,6 +230,7 @@ pub struct SshMountRequest {
     pub local_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_only: Option<bool>,
+    #[schemars(description = "Mount backend. Allowed values: sshfs. Default: automatic backend selection.")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<SshMountBackend>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,6 +290,7 @@ pub struct SshDisconnectResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PtyKillRequest {
     pub session_id: SessionId,
+    #[schemars(description = "Signal to send to the PTY process. Allowed values: sigint | sigterm | sigkill. Default: sigterm.")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<SignalKind>,
     #[serde(skip_serializing_if = "Option::is_none")]

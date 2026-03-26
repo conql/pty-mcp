@@ -48,6 +48,7 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
 
     for tool in tool_definitions {
         assert_eq!(tool.task_support(), TaskSupport::Optional);
+        assert_nullable_enum_properties_have_descriptions(tool.name.as_ref(), &tool.input_schema);
     }
 
     let read_schema = server
@@ -71,9 +72,14 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
         .expect("pty_write tool")
         .input_schema;
     let write_mode = &write_schema["properties"]["mode"];
+    assert_eq!(write_mode["type"], serde_json::json!(["string", "null"]));
     assert_eq!(
         write_mode["enum"],
         serde_json::json!(["plain", "escaped", null])
+    );
+    assert_eq!(
+        write_mode["description"],
+        "Write mode. Allowed values: plain | escaped. Default: plain."
     );
 
     let kill_schema = server
@@ -618,4 +624,38 @@ fn schema_contains_key(value: &Value, target: &str) -> bool {
         Value::Array(items) => items.iter().any(|value| schema_contains_key(value, target)),
         _ => false,
     }
+}
+
+fn assert_nullable_enum_properties_have_descriptions(
+    tool_name: &str,
+    schema: &serde_json::Map<String, Value>,
+) {
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return;
+    };
+
+    for (property_name, property_schema) in properties {
+        let Some(property_object) = property_schema.as_object() else {
+            continue;
+        };
+
+        if property_is_nullable_enum(property_object) {
+            let description = property_object
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            assert!(
+                !description.is_empty(),
+                "tool {tool_name} property {property_name} has a union schema but no description: {}",
+                serde_json::to_string_pretty(property_schema).expect("schema json"),
+            );
+        }
+    }
+}
+
+fn property_is_nullable_enum(property_schema: &serde_json::Map<String, Value>) -> bool {
+    property_schema
+        .get("enum")
+        .and_then(Value::as_array)
+        .is_some_and(|items| items.iter().any(Value::is_null))
 }
