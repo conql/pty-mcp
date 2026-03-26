@@ -1,0 +1,307 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use pty_mcp::{
+    AppState, Config, PtyErrorCode,
+    app::{SshMountRequest, SshUnmountRequest},
+    ssh::{SshConnectionStatus, SshMountId, SshMountStatus, SshTarget},
+};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+fn default_target() -> SshTarget {
+    SshTarget {
+        host_alias: Some("devbox".to_string()),
+        host: "devbox.example.com".to_string(),
+        user: Some("alice".to_string()),
+        port: Some(22),
+    }
+}
+
+#[derive(Debug)]
+struct TempDirGuard {
+    path: PathBuf,
+}
+
+impl TempDirGuard {
+    fn new(prefix: &str) -> anyhow::Result<Self> {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "pty_mcp_ssh_mount_{prefix}_{}_{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&path)?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn ready_connection(app: &AppState) -> pty_mcp::ssh::SshConnectionSummary {
+    let mut connection = app.ssh_create_placeholder_connection(default_target());
+    connection.status = SshConnectionStatus::Ready;
+    app.ssh_upsert_connection(connection.clone());
+    connection
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dirs()
+-> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("managed")?;
+    let managed_root = sandbox.path.join("managed");
+    let explicit_root = sandbox.path.join("workspace");
+    fs::create_dir_all(&managed_root)?;
+    fs::create_dir_all(&explicit_root)?;
+
+    let sshfs_path = sandbox.path.join("sshfs");
+    let umount_path = sandbox.path.join("umount");
+    let log_path = sandbox.path.join("mount.log");
+    write_fake_executable(
+        &sshfs_path,
+        &format!(
+            "#!/bin/sh\nset -eu\nprintf 'sshfs %s\\n' \"$*\" >> {log}\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
+            log = shell_quote(log_path.as_path()),
+        ),
+    )?;
+    write_fake_executable(
+        &umount_path,
+        &format!(
+            "#!/bin/sh\nset -eu\nprintf 'umount %s\\n' \"$*\" >> {log}\ntarget=''\nfor arg in \"$@\"; do target=\"$arg\"; done\nrm -f \"$target/.sshfs-mounted\"\n",
+            log = shell_quote(log_path.as_path()),
+        ),
+    )?;
+
+    let mut config = Config::default();
+    config.allowed_cwd_roots = vec![explicit_root.clone()];
+    config.ssh.allowed_mount_roots = vec![explicit_root.clone()];
+    config.ssh.managed_mount_root = Some(managed_root.clone());
+    config.ssh.sshfs_bin_path = Some(sshfs_path);
+    config.ssh.umount_bin_path = Some(umount_path);
+    let app = AppState::new(config);
+    let connection = ready_connection(&app);
+    let managed_path = managed_root.join("managed-mount");
+
+    let managed_mount = app
+        .ssh_mount(SshMountRequest {
+            connection_id: connection.connection_id.clone(),
+            remote_path: "/srv/project".to_string(),
+            local_path: managed_path.display().to_string(),
+            read_only: false,
+            backend: None,
+            create_local_path: true,
+            title: Some("Managed".to_string()),
+            description: "managed mount".to_string(),
+        })
+        .await?;
+
+    assert_eq!(managed_mount.status, SshMountStatus::Mounted);
+    assert!(managed_path.starts_with(&managed_root));
+    assert!(managed_path.join(".sshfs-mounted").exists());
+    assert_eq!(
+        app.ssh_get_connection(&connection.connection_id)
+            .expect("connection should exist")
+            .active_mount_count,
+        1
+    );
+
+    let managed_unmount = app
+        .ssh_unmount(SshUnmountRequest {
+            mount_id: managed_mount.mount_id.clone(),
+            force: false,
+            cleanup_local_path: true,
+        })
+        .await?;
+    assert_eq!(managed_unmount.previous_status, SshMountStatus::Mounted);
+    assert_eq!(managed_unmount.mount.status, SshMountStatus::Unmounted);
+    assert!(managed_unmount.cleanup_local_path);
+    assert!(!managed_path.exists());
+
+    let explicit_path = explicit_root.join("explicit-mount");
+    fs::create_dir_all(&explicit_path)?;
+    let explicit_mount = app
+        .ssh_mount(SshMountRequest {
+            connection_id: connection.connection_id,
+            remote_path: "/srv/project-explicit".to_string(),
+            local_path: explicit_path.display().to_string(),
+            read_only: false,
+            backend: None,
+            create_local_path: false,
+            title: Some("Explicit".to_string()),
+            description: "explicit mount".to_string(),
+        })
+        .await?;
+
+    let explicit_unmount = app
+        .ssh_unmount(SshUnmountRequest {
+            mount_id: explicit_mount.mount_id,
+            force: false,
+            cleanup_local_path: true,
+        })
+        .await?;
+    assert!(!explicit_unmount.cleanup_local_path);
+    assert!(explicit_path.exists());
+
+    let log = fs::read_to_string(log_path)?;
+    assert!(log.contains("/srv/project"));
+    assert!(log.contains("explicit-mount"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn ssh_mount_reports_capability_unavailable_when_sshfs_missing() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("missing_sshfs")?;
+    let mut config = Config::default();
+    config.ssh.sshfs_bin_path = Some(sandbox.path.join("missing-sshfs"));
+    let app = AppState::new(config);
+    let connection = ready_connection(&app);
+
+    let error = app
+        .ssh_mount(SshMountRequest {
+            connection_id: connection.connection_id,
+            remote_path: "/srv/project".to_string(),
+            local_path: sandbox
+                .path
+                .join("missing-sshfs-mount")
+                .display()
+                .to_string(),
+            read_only: false,
+            backend: None,
+            create_local_path: true,
+            title: None,
+            description: "missing sshfs".to_string(),
+        })
+        .await
+        .expect_err("mount should fail when sshfs is unavailable");
+    assert_eq!(error.error_code, PtyErrorCode::SshCapabilityUnavailable);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ssh_unmount_reports_missing_mount() -> anyhow::Result<()> {
+    let app = AppState::new(Config::default());
+    let error = app
+        .ssh_unmount(SshUnmountRequest {
+            mount_id: SshMountId::new(),
+            force: false,
+            cleanup_local_path: false,
+        })
+        .await
+        .expect_err("missing mount should fail");
+    assert_eq!(error.error_code, PtyErrorCode::SshMountNotFound);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_mount_failures_are_recorded_on_mount_summary() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("mount_failure")?;
+    let managed_root = sandbox.path.join("managed");
+    fs::create_dir_all(&managed_root)?;
+    let sshfs_path = sandbox.path.join("sshfs");
+    write_fake_executable(
+        &sshfs_path,
+        "#!/bin/sh\necho 'fuse: mount failed' 1>&2\nexit 1\n",
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.managed_mount_root = Some(managed_root.clone());
+    config.ssh.sshfs_bin_path = Some(sshfs_path);
+    let app = AppState::new(config);
+    let connection = ready_connection(&app);
+    let local_path = managed_root.join("failing-mount");
+
+    let error = app
+        .ssh_mount(SshMountRequest {
+            connection_id: connection.connection_id,
+            remote_path: "/srv/project".to_string(),
+            local_path: local_path.display().to_string(),
+            read_only: false,
+            backend: None,
+            create_local_path: true,
+            title: None,
+            description: "failing mount".to_string(),
+        })
+        .await
+        .expect_err("mount should fail");
+    assert_eq!(error.error_code, PtyErrorCode::SshMountFailed);
+
+    let mounts = app.ssh_list_mounts();
+    assert_eq!(mounts.len(), 1);
+    assert_eq!(mounts[0].status, SshMountStatus::Failed);
+    assert_eq!(mounts[0].last_error.as_deref(), Some("ssh mount failed"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_unmounts_managed_mounts() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("shutdown_cleanup")?;
+    let managed_root = sandbox.path.join("managed");
+    fs::create_dir_all(&managed_root)?;
+    let sshfs_path = sandbox.path.join("sshfs");
+    let umount_path = sandbox.path.join("umount");
+    write_fake_executable(
+        &sshfs_path,
+        "#!/bin/sh\nset -eu\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
+    )?;
+    write_fake_executable(
+        &umount_path,
+        "#!/bin/sh\nset -eu\ntarget=''\nfor arg in \"$@\"; do target=\"$arg\"; done\nrm -f \"$target/.sshfs-mounted\"\n",
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.managed_mount_root = Some(managed_root.clone());
+    config.ssh.sshfs_bin_path = Some(sshfs_path);
+    config.ssh.umount_bin_path = Some(umount_path);
+    let app = AppState::new(config);
+    let connection = ready_connection(&app);
+    let local_path = managed_root.join("shutdown-mount");
+
+    let _mount = app
+        .ssh_mount(SshMountRequest {
+            connection_id: connection.connection_id,
+            remote_path: "/srv/project".to_string(),
+            local_path: local_path.display().to_string(),
+            read_only: false,
+            backend: None,
+            create_local_path: true,
+            title: None,
+            description: "shutdown cleanup mount".to_string(),
+        })
+        .await?;
+
+    assert!(local_path.exists());
+
+    app.shutdown().await?;
+
+    assert!(!local_path.exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_fake_executable(path: &Path, body: &str) -> anyhow::Result<()> {
+    fs::write(path, body)?;
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn shell_quote(path: &Path) -> String {
+    let raw = path.display().to_string();
+    format!("'{}'", raw.replace('\'', "'\"'\"'"))
+}

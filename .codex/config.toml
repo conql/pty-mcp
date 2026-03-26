@@ -1,0 +1,3 @@
+[mcp_servers.pty]
+command = "cargo"
+args = ["run", "--bin", "pty-mcp"]
