@@ -9,7 +9,8 @@
 - `ssh_connection`
 - `pty_session` with `transport="ssh"`
 - `ssh_mount`
-- `ssh_connect` / `ssh_session_spawn` / `ssh_mount` / `ssh_unmount` / `ssh_list` / `ssh_disconnect`
+- remote file and directory helpers
+- `ssh_connect` / `ssh_session_spawn` / `ssh_exec` / `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_mkdir` / `ssh_mount` / `ssh_unmount` / `ssh_list` / `ssh_disconnect`
 
 实现范围必须坚持：
 
@@ -44,7 +45,8 @@
 - `ssh_connection` / `ssh_mount` 领域模型与 SSH registry 主体结构
 - SSH 专用错误码与状态机
 - `pty_list` 的远程字段扩展
-- `ssh_connect` / `ssh_session_spawn` / `ssh_list`
+- `ssh_connect` / `ssh_session_spawn` / `ssh_exec` / `ssh_list`
+- `ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_mkdir`
 - SSH Phase 2 `resources`
 - `ssh_capability_probe`、`ssh_runtime` 中的连接验证与远程 session spawn plan
 - SSH 策略校验
@@ -56,10 +58,12 @@
 
 - 仅依赖 MCP `tools` 即可完成 `ssh_connect -> ssh_session_spawn -> pty_* -> ssh_disconnect`
 - 仅依赖 MCP `tools` 即可完成 `ssh_connect -> ssh_mount -> 本地工具访问 -> ssh_unmount -> ssh_disconnect`
+- 仅依赖 MCP `tools` 即可完成 `ssh_connect -> ssh_read_file` / `ssh_write_file` / `ssh_list_dir` / `ssh_mkdir`
 - `pty_list` 可以明确区分本地 session 和远程 session
 - `ssh_connect` 明确返回 capability 信息，而不是隐含依赖宿主机环境
 - `ssh_session_spawn` 复用现有 PTY 读写等待接口，不新增 `ssh_read` / `ssh_write` / `ssh_wait` / `ssh_kill`
 - `ssh_mount` 返回的 `local_path` 可以直接用于本地文件读写、搜索与编辑
+- 文本远程文件读写和目录操作不要求用户先挂载 `sshfs`
 - 错误具有稳定错误码，而不是仅返回自由文本
 - 具备基础的宿主机二进制探测、目标策略、挂载路径策略和退出清理能力
 

@@ -55,9 +55,10 @@ impl ServerHandler for PtyMcpServer {
         ServerInfo::new(capabilities).with_instructions(
             "Manage PTY sessions through tools. Use pty_spawn, pty_write, pty_read, pty_list, \
                  pty_kill, and pty_wait for the main PTY workflow. Use ssh_connect, \
-                 ssh_session_spawn, ssh_mount, ssh_unmount, ssh_list, and ssh_disconnect to \
-                 manage SSH connections, remote sessions, and mount summaries. Resources expose \
-                 read-only snapshots, including pty://sessions plus ssh://connections and \
+                 ssh_session_spawn, ssh_exec, ssh_read_file, ssh_write_file, ssh_list_dir, \
+                 ssh_mkdir, ssh_mount, ssh_unmount, ssh_list, and ssh_disconnect to manage SSH \
+                 connections, remote sessions, remote files, and mount summaries. Resources \
+                 expose read-only snapshots, including pty://sessions plus ssh://connections and \
                  ssh://mounts, and tasks are available as an optional enhancement.",
         )
     }

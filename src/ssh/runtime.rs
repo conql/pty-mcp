@@ -17,6 +17,7 @@ use super::model::{SshAuthKind, SshConnectionSummary, SshMountSummary, SshTarget
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const DEFAULT_MOUNT_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_UNMOUNT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone)]
 pub struct SshConnectVerificationRequest {
@@ -206,6 +207,41 @@ impl SshRuntime {
             true,
             Some(remote_command),
         ))
+    }
+
+    pub async fn exec_capture(
+        &self,
+        request: SshExecPlanRequest,
+        timeout: Option<Duration>,
+    ) -> Result<Output, PtyError> {
+        let ssh_bin_path = ensure_ssh_binary(request.ssh_bin_path)?;
+        let remote_command = build_remote_exec_command(
+            &request.script,
+            request.cwd.as_deref(),
+            &request.env,
+            request.shell.as_deref(),
+            request.login,
+        )?;
+        let plan = build_ssh_session_plan(
+            ssh_bin_path.clone(),
+            request.target.clone(),
+            request.auth_kind.clone(),
+            request.identity_path.clone(),
+            request.verify_host_key,
+            false,
+            Some(remote_command),
+        );
+
+        run_command(
+            ssh_bin_path,
+            plan.args,
+            timeout.unwrap_or(DEFAULT_CAPTURE_TIMEOUT),
+            PtyErrorCode::SshConnectionNotReady,
+            "ssh command timed out",
+            "ssh command task failed",
+            "failed to execute ssh command",
+        )
+        .await
     }
 
     pub async fn unmount(&self, request: SshUnmountRequest) -> Result<(), PtyError> {
@@ -523,7 +559,7 @@ fn build_ssh_session_plan(
     }
 }
 
-fn shell_escape(value: &str) -> String {
+pub(crate) fn shell_escape(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
     }

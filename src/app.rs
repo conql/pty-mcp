@@ -2,9 +2,12 @@ use chrono::Utc;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::process::Output;
 use std::sync::RwLock;
 
-use crate::ssh::runtime::{SshConnectVerificationRequest, SshSessionSpawnPlanRequest};
+use crate::ssh::runtime::{
+    SshConnectVerificationRequest, SshExecPlanRequest, SshSessionSpawnPlanRequest, shell_escape,
+};
 use crate::{
     PtyError,
     buffer::{BufferReadPage, BufferReadRequest},
@@ -125,6 +128,51 @@ pub struct SshDisconnectResult {
     pub current_status: SshConnectionStatus,
     pub closed_sessions: usize,
     pub closed_mounts: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshReadFileResult {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    pub content: String,
+    pub bytes_read: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshWriteFileResult {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    pub bytes_written: usize,
+    pub append: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SshDirectoryEntryType {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshDirectoryEntry {
+    pub name: String,
+    pub path: String,
+    pub entry_type: SshDirectoryEntryType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshListDirectoryResult {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    pub entries: Vec<SshDirectoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshMkdirResult {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    pub parents: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -998,6 +1046,203 @@ impl AppState {
             .expect("session disappeared after ssh_exec"))
     }
 
+    pub async fn ssh_read_file(
+        &self,
+        connection_id: &SshConnectionId,
+        path: &str,
+        max_bytes: usize,
+    ) -> Result<SshReadFileResult, PtyError> {
+        let path = validate_remote_path(path, "ssh_read_file path")?;
+        let max_bytes = validate_remote_max_bytes(max_bytes)?;
+        let script = format!(
+            "set -eu\nfile={path}\nbytes=$(wc -c < \"$file\" | tr -d '[:space:]')\ncase \"$bytes\" in\n  ''|*[!0-9]*) echo 'failed to determine file size' >&2; exit 1 ;;\nesac\nif [ \"$bytes\" -gt {max_bytes} ]; then\n  echo \"__PTY_MCP_FILE_TOO_LARGE__:$bytes\" >&2\n  exit 3\nfi\ncat -- \"$file\"",
+            path = shell_escape(path),
+            max_bytes = max_bytes,
+        );
+        let output = self
+            .run_ssh_capture(
+                connection_id,
+                &script,
+                Some("failed to read remote file"),
+                Some(path),
+            )
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if let Some(size) = parse_file_too_large_marker(&stderr) {
+                return Err(PtyError::new(
+                    crate::PtyErrorCode::ReadFailed,
+                    "remote file exceeds max_bytes",
+                )
+                .with_details(serde_json::json!({
+                    "connection_id": connection_id.as_str(),
+                    "path": path,
+                    "max_bytes": max_bytes,
+                    "actual_bytes": size,
+                })));
+            }
+
+            return Err(remote_command_failed(
+                crate::PtyErrorCode::ReadFailed,
+                "failed to read remote file",
+                connection_id,
+                Some(path),
+                output,
+            ));
+        }
+
+        let bytes_read = output.stdout.len();
+        let content = String::from_utf8(output.stdout).map_err(|_| {
+            PtyError::new(
+                crate::PtyErrorCode::ReadFailed,
+                "remote file is not valid UTF-8 text",
+            )
+            .with_details(serde_json::json!({
+                "connection_id": connection_id.as_str(),
+                "path": path,
+                "bytes_read": bytes_read,
+            }))
+        })?;
+
+        Ok(SshReadFileResult {
+            connection_id: connection_id.clone(),
+            path: path.to_string(),
+            content,
+            bytes_read,
+        })
+    }
+
+    pub async fn ssh_write_file(
+        &self,
+        connection_id: &SshConnectionId,
+        path: &str,
+        content: &str,
+        append: bool,
+        create_parent: bool,
+    ) -> Result<SshWriteFileResult, PtyError> {
+        let path = validate_remote_path(path, "ssh_write_file path")?;
+        validate_remote_write_size(content)?;
+        let redirect = if append { ">>" } else { ">" };
+        let mut script = String::from("set -eu\n");
+        if create_parent {
+            script.push_str(&format!(
+                "mkdir -p -- \"$(dirname -- {})\"\n",
+                shell_escape(path)
+            ));
+        }
+        script.push_str(&format!(
+            "printf '%s' {content} {redirect} {path}\n",
+            redirect = redirect,
+            path = shell_escape(path),
+            content = shell_escape(content),
+        ));
+
+        let output = self
+            .run_ssh_capture(
+                connection_id,
+                &script,
+                Some("failed to write remote file"),
+                Some(path),
+            )
+            .await?;
+        if !output.status.success() {
+            return Err(remote_command_failed(
+                crate::PtyErrorCode::WriteFailed,
+                "failed to write remote file",
+                connection_id,
+                Some(path),
+                output,
+            ));
+        }
+
+        Ok(SshWriteFileResult {
+            connection_id: connection_id.clone(),
+            path: path.to_string(),
+            bytes_written: content.len(),
+            append,
+        })
+    }
+
+    pub async fn ssh_list_directory(
+        &self,
+        connection_id: &SshConnectionId,
+        path: &str,
+        include_hidden: bool,
+    ) -> Result<SshListDirectoryResult, PtyError> {
+        let path = validate_remote_path(path, "ssh_list_dir path")?;
+        let script = build_list_directory_script(path, include_hidden);
+        let output = self
+            .run_ssh_capture(
+                connection_id,
+                &script,
+                Some("failed to list remote directory"),
+                Some(path),
+            )
+            .await?;
+        if !output.status.success() {
+            return Err(remote_command_failed(
+                crate::PtyErrorCode::ReadFailed,
+                "failed to list remote directory",
+                connection_id,
+                Some(path),
+                output,
+            ));
+        }
+
+        let entries = parse_directory_entries(&output.stdout).map_err(|reason| {
+            PtyError::new(
+                crate::PtyErrorCode::ReadFailed,
+                "failed to parse remote directory listing",
+            )
+            .with_details(serde_json::json!({
+                "connection_id": connection_id.as_str(),
+                "path": path,
+                "reason": reason,
+            }))
+        })?;
+
+        Ok(SshListDirectoryResult {
+            connection_id: connection_id.clone(),
+            path: path.to_string(),
+            entries,
+        })
+    }
+
+    pub async fn ssh_mkdir(
+        &self,
+        connection_id: &SshConnectionId,
+        path: &str,
+        parents: bool,
+    ) -> Result<SshMkdirResult, PtyError> {
+        let path = validate_remote_path(path, "ssh_mkdir path")?;
+        let flag = if parents { "-p " } else { "" };
+        let script = format!("set -eu\nmkdir {flag}-- {path}", flag = flag, path = shell_escape(path));
+        let output = self
+            .run_ssh_capture(
+                connection_id,
+                &script,
+                Some("failed to create remote directory"),
+                Some(path),
+            )
+            .await?;
+        if !output.status.success() {
+            return Err(remote_command_failed(
+                crate::PtyErrorCode::WriteFailed,
+                "failed to create remote directory",
+                connection_id,
+                Some(path),
+                output,
+            ));
+        }
+
+        Ok(SshMkdirResult {
+            connection_id: connection_id.clone(),
+            path: path.to_string(),
+            parents,
+        })
+    }
+
     pub async fn spawn_session(
         &self,
         request: SpawnSessionRequest,
@@ -1305,6 +1550,72 @@ impl AppState {
 
         Ok(true)
     }
+
+    async fn run_ssh_capture(
+        &self,
+        connection_id: &SshConnectionId,
+        script: &str,
+        error_message: Option<&str>,
+        path: Option<&str>,
+    ) -> Result<Output, PtyError> {
+        let connection = self
+            .ssh_registry
+            .get_connection(connection_id)
+            .ok_or_else(|| {
+                PtyError::new(
+                    crate::PtyErrorCode::SshConnectionNotFound,
+                    "ssh connection not found",
+                )
+                .with_details(serde_json::json!({
+                    "connection_id": connection_id.as_str(),
+                }))
+            })?;
+
+        if !matches!(
+            connection.status,
+            SshConnectionStatus::Ready | SshConnectionStatus::Degraded
+        ) {
+            return Err(PtyError::new(
+                crate::PtyErrorCode::SshConnectionNotReady,
+                error_message.unwrap_or("ssh connection is not ready"),
+            )
+            .with_details(serde_json::json!({
+                "connection_id": connection_id.as_str(),
+                "status": connection.status,
+                "path": path,
+            })));
+        }
+
+        let context = self.runtime_context_for_connection(&connection);
+        let ssh_bin = self
+            .ssh_config
+            .resolved_ssh_bin_path()
+            .or_else(|| self.ssh_capabilities.ssh.path.as_ref().map(PathBuf::from))
+            .ok_or_else(|| {
+                PtyError::new(
+                    crate::PtyErrorCode::SshCapabilityUnavailable,
+                    "ssh binary path could not be resolved",
+                )
+            })?;
+
+        self.ssh_runtime
+            .exec_capture(
+                SshExecPlanRequest {
+                    ssh_bin_path: Some(ssh_bin),
+                    target: connection.target.clone(),
+                    auth_kind: context.auth_kind,
+                    identity_path: context.identity_path.clone(),
+                    verify_host_key: context.verify_host_key,
+                    script: script.to_string(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    shell: Some("/bin/sh".to_string()),
+                    login: false,
+                },
+                None,
+            )
+            .await
+    }
 }
 
 fn normalize_ssh_config(config: &mut Config) {
@@ -1374,4 +1685,132 @@ fn is_active_mount_status(status: &crate::ssh::SshMountStatus) -> bool {
             | crate::ssh::SshMountStatus::Mounted
             | crate::ssh::SshMountStatus::Unmounting
     )
+}
+
+fn validate_remote_path<'a>(path: &'a str, field: &str) -> Result<&'a str, PtyError> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(PtyError::new(
+            crate::PtyErrorCode::InvalidArgument,
+            format!("{field} cannot be empty"),
+        ));
+    }
+    if path.contains('\0') {
+        return Err(PtyError::new(
+            crate::PtyErrorCode::InvalidArgument,
+            format!("{field} cannot contain NUL bytes"),
+        ));
+    }
+    Ok(path)
+}
+
+fn validate_remote_max_bytes(max_bytes: usize) -> Result<usize, PtyError> {
+    if max_bytes == 0 {
+        return Err(PtyError::new(
+            crate::PtyErrorCode::InvalidArgument,
+            "ssh_read_file max_bytes must be greater than zero",
+        ));
+    }
+    if max_bytes > 512 * 1024 {
+        return Err(PtyError::new(
+            crate::PtyErrorCode::InvalidArgument,
+            "ssh_read_file max_bytes must be at most 524288",
+        ));
+    }
+    Ok(max_bytes)
+}
+
+fn validate_remote_write_size(content: &str) -> Result<(), PtyError> {
+    if content.len() > 256 * 1024 {
+        return Err(PtyError::new(
+            crate::PtyErrorCode::InvalidArgument,
+            "ssh_write_file content must be at most 262144 bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_file_too_large_marker(stderr: &str) -> Option<usize> {
+    stderr.lines().find_map(|line| {
+        line.find("__PTY_MCP_FILE_TOO_LARGE__:")
+            .and_then(|offset| line[offset + "__PTY_MCP_FILE_TOO_LARGE__:".len()..].trim().parse().ok())
+    })
+}
+
+fn remote_command_failed(
+    error_code: crate::PtyErrorCode,
+    message: &str,
+    connection_id: &SshConnectionId,
+    path: Option<&str>,
+    output: Output,
+) -> PtyError {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    PtyError::new(error_code, message).with_details(serde_json::json!({
+        "connection_id": connection_id.as_str(),
+        "path": path,
+        "exit_code": output.status.code(),
+        "stderr_preview": stderr_preview(&stderr),
+        "stdout_preview": stderr_preview(&stdout),
+    }))
+}
+
+fn stderr_preview(output: &str) -> String {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed.chars().take(512).collect()
+}
+
+fn build_list_directory_script(path: &str, include_hidden: bool) -> String {
+    let mut script = format!(
+        "set -eu\ndir={path}\nif [ ! -d \"$dir\" ]; then\n  echo 'remote path is not a directory' >&2\n  exit 1\nfi\n",
+        path = shell_escape(path)
+    );
+
+    if include_hidden {
+        script.push_str("set -- \"$dir\"/.[!.]* \"$dir\"/..?* \"$dir\"/*\n");
+    } else {
+        script.push_str("set -- \"$dir\"/*\n");
+    }
+
+    script.push_str(
+        "for entry in \"$@\"; do\n  if [ ! -e \"$entry\" ] && [ ! -L \"$entry\" ]; then\n    continue\n  fi\n  name=${entry##*/}\n  kind=other\n  if [ -L \"$entry\" ]; then\n    kind=symlink\n  elif [ -d \"$entry\" ]; then\n    kind=directory\n  elif [ -f \"$entry\" ]; then\n    kind=file\n  fi\n  printf '%s\\0%s\\0%s\\0' \"$kind\" \"$name\" \"$entry\"\ndone\n",
+    );
+
+    script
+}
+
+fn parse_directory_entries(bytes: &[u8]) -> Result<Vec<SshDirectoryEntry>, &'static str> {
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let fields = bytes.split(|byte| *byte == 0).collect::<Vec<_>>();
+    if fields.last().is_some_and(|field| !field.is_empty()) {
+        return Err("directory listing is missing a trailing field separator");
+    }
+    if fields.len() % 3 != 1 {
+        return Err("directory listing field count is invalid");
+    }
+
+    let mut entries = Vec::new();
+    for chunk in fields[..fields.len() - 1].chunks(3) {
+        let entry_type = std::str::from_utf8(chunk[0]).map_err(|_| "entry type is not utf-8")?;
+        let name = std::str::from_utf8(chunk[1]).map_err(|_| "entry name is not utf-8")?;
+        let path = std::str::from_utf8(chunk[2]).map_err(|_| "entry path is not utf-8")?;
+        entries.push(SshDirectoryEntry {
+            name: name.to_string(),
+            path: path.to_string(),
+            entry_type: match entry_type {
+                "file" => SshDirectoryEntryType::File,
+                "directory" => SshDirectoryEntryType::Directory,
+                "symlink" => SshDirectoryEntryType::Symlink,
+                _ => SshDirectoryEntryType::Other,
+            },
+        });
+    }
+
+    Ok(entries)
 }

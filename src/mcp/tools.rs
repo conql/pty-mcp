@@ -8,7 +8,7 @@ use crate::{
     app::{
         SshConnectRequest as AppSshConnectRequest, SshDisconnectRequest as AppSshDisconnectRequest,
         SshExecRequest as AppSshExecRequest, SshMountRequest as AppSshMountRequest,
-        SshSessionSpawnRequest as AppSshSessionSpawnRequest,
+        SshDirectoryEntryType, SshSessionSpawnRequest as AppSshSessionSpawnRequest,
         SshUnmountRequest as AppSshUnmountRequest,
     },
     buffer::{BufferReadPage, BufferReadRequest, BufferView},
@@ -285,6 +285,87 @@ pub struct SshDisconnectResponse {
     pub current_status: SshConnectionStatus,
     pub closed_sessions: usize,
     pub closed_mounts: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshReadFileRequest {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshReadFileResponse {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    pub content: String,
+    pub bytes_read: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshWriteFileRequest {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub append: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_parent: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshWriteFileResponse {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    pub bytes_written: usize,
+    pub append: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SshDirectoryEntryTypeView {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshDirectoryEntryView {
+    pub name: String,
+    pub path: String,
+    pub entry_type: SshDirectoryEntryTypeView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshListDirRequest {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_hidden: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshListDirResponse {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    pub entries: Vec<SshDirectoryEntryView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshMkdirRequest {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parents: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshMkdirResponse {
+    pub connection_id: SshConnectionId,
+    pub path: String,
+    pub parents: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -686,6 +767,133 @@ impl PtyMcpServer {
                 current_status: result.current_status,
                 closed_sessions: result.closed_sessions,
                 closed_mounts: result.closed_mounts,
+            }),
+            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+        }
+    }
+
+    #[tool(
+        name = "ssh_read_file",
+        description = "Read a UTF-8 text file over an existing SSH connection.",
+        execution(task_support = "optional")
+    )]
+    pub async fn ssh_read_file(
+        &self,
+        Parameters(request): Parameters<SshReadFileRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match self
+            .app()
+            .ssh_read_file(
+                &request.connection_id,
+                &request.path,
+                request.max_bytes.unwrap_or(128 * 1024),
+            )
+            .await
+        {
+            Ok(result) => structured(&SshReadFileResponse {
+                connection_id: result.connection_id,
+                path: result.path,
+                content: result.content,
+                bytes_read: result.bytes_read,
+            }),
+            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+        }
+    }
+
+    #[tool(
+        name = "ssh_write_file",
+        description = "Write a UTF-8 text file over an existing SSH connection.",
+        execution(task_support = "optional")
+    )]
+    pub async fn ssh_write_file(
+        &self,
+        Parameters(request): Parameters<SshWriteFileRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match self
+            .app()
+            .ssh_write_file(
+                &request.connection_id,
+                &request.path,
+                &request.content,
+                request.append.unwrap_or(false),
+                request.create_parent.unwrap_or(false),
+            )
+            .await
+        {
+            Ok(result) => structured(&SshWriteFileResponse {
+                connection_id: result.connection_id,
+                path: result.path,
+                bytes_written: result.bytes_written,
+                append: result.append,
+            }),
+            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+        }
+    }
+
+    #[tool(
+        name = "ssh_list_dir",
+        description = "List one remote directory level over an existing SSH connection.",
+        execution(task_support = "optional")
+    )]
+    pub async fn ssh_list_dir(
+        &self,
+        Parameters(request): Parameters<SshListDirRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match self
+            .app()
+            .ssh_list_directory(
+                &request.connection_id,
+                &request.path,
+                request.include_hidden.unwrap_or(false),
+            )
+            .await
+        {
+            Ok(result) => structured(&SshListDirResponse {
+                connection_id: result.connection_id,
+                path: result.path,
+                entries: result
+                    .entries
+                    .into_iter()
+                    .map(|entry| SshDirectoryEntryView {
+                        name: entry.name,
+                        path: entry.path,
+                        entry_type: match entry.entry_type {
+                            SshDirectoryEntryType::File => SshDirectoryEntryTypeView::File,
+                            SshDirectoryEntryType::Directory => {
+                                SshDirectoryEntryTypeView::Directory
+                            }
+                            SshDirectoryEntryType::Symlink => SshDirectoryEntryTypeView::Symlink,
+                            SshDirectoryEntryType::Other => SshDirectoryEntryTypeView::Other,
+                        },
+                    })
+                    .collect(),
+            }),
+            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+        }
+    }
+
+    #[tool(
+        name = "ssh_mkdir",
+        description = "Create a remote directory over an existing SSH connection.",
+        execution(task_support = "optional")
+    )]
+    pub async fn ssh_mkdir(
+        &self,
+        Parameters(request): Parameters<SshMkdirRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match self
+            .app()
+            .ssh_mkdir(
+                &request.connection_id,
+                &request.path,
+                request.parents.unwrap_or(false),
+            )
+            .await
+        {
+            Ok(result) => structured(&SshMkdirResponse {
+                connection_id: result.connection_id,
+                path: result.path,
+                parents: result.parents,
             }),
             Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
         }

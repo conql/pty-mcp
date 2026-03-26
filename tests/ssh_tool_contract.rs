@@ -4,7 +4,8 @@ use pty_mcp::{
     app::SshDisconnectRequest,
     mcp::tools::{
         PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse,
-        SshDisconnectResponse, SshListResponse, SshMountResponse, SshSessionSpawnResponse,
+        SshDisconnectResponse, SshListDirResponse, SshListResponse, SshMkdirResponse,
+        SshMountResponse, SshReadFileResponse, SshSessionSpawnResponse, SshWriteFileResponse,
     },
     ssh::{
         SshConnectionStatus, SshMountBackend, SshMountId, SshMountStatus, SshMountSummary,
@@ -261,6 +262,22 @@ fn ssh_tools_are_registered_and_task_optional() {
         .iter()
         .find(|tool| tool.name == "ssh_mount")
         .expect("ssh_mount should be registered");
+    let read_file = tool_defs
+        .iter()
+        .find(|tool| tool.name == "ssh_read_file")
+        .expect("ssh_read_file should be registered");
+    let write_file = tool_defs
+        .iter()
+        .find(|tool| tool.name == "ssh_write_file")
+        .expect("ssh_write_file should be registered");
+    let list_dir = tool_defs
+        .iter()
+        .find(|tool| tool.name == "ssh_list_dir")
+        .expect("ssh_list_dir should be registered");
+    let mkdir = tool_defs
+        .iter()
+        .find(|tool| tool.name == "ssh_mkdir")
+        .expect("ssh_mkdir should be registered");
     let unmount = tool_defs
         .iter()
         .find(|tool| tool.name == "ssh_unmount")
@@ -275,6 +292,10 @@ fn ssh_tools_are_registered_and_task_optional() {
     assert_eq!(session_spawn.task_support(), TaskSupport::Optional);
     assert_eq!(exec.task_support(), TaskSupport::Optional);
     assert_eq!(mount.task_support(), TaskSupport::Optional);
+    assert_eq!(read_file.task_support(), TaskSupport::Optional);
+    assert_eq!(write_file.task_support(), TaskSupport::Optional);
+    assert_eq!(list_dir.task_support(), TaskSupport::Optional);
+    assert_eq!(mkdir.task_support(), TaskSupport::Optional);
     assert_eq!(unmount.task_support(), TaskSupport::Optional);
     assert_eq!(disconnect.task_support(), TaskSupport::Optional);
 
@@ -308,6 +329,14 @@ fn ssh_tools_are_registered_and_task_optional() {
         .and_then(Value::as_array)
         .expect("ssh_mount should expose required fields");
     assert!(mount_required.contains(&serde_json::json!("local_path")));
+
+    let read_required = read_file
+        .input_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("ssh_read_file should expose required fields");
+    assert!(read_required.contains(&serde_json::json!("connection_id")));
+    assert!(read_required.contains(&serde_json::json!("path")));
 }
 
 #[cfg(unix)]
@@ -844,6 +873,203 @@ async fn ssh_disconnect_force_cleans_up_session_and_mounts() -> anyhow::Result<(
             .into_iter()
             .all(|session| session.session_id != spawned.session_id)
     );
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_file_and_directory_tools_operate_over_existing_connection() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("file_tools")?;
+    let ssh_path = sandbox.path.join("ssh");
+    write_fake_executable(
+        &ssh_path,
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nsh -lc \"$last\"\n",
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    let app = Arc::new(AppState::new(config));
+    let server = PtyMcpServer::new(app);
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let connected = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_connect").with_arguments(
+                serde_json::json!({
+                    "host_alias": "devbox",
+                    "user": "alice",
+                    "description": "ssh file tools contract"
+                })
+                .as_object()
+                .expect("connect args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshConnectResponse>()?;
+
+    let created_dir = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_mkdir").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "path": sandbox.path.join("remote/nested"),
+                    "parents": true
+                })
+                .as_object()
+                .expect("ssh_mkdir args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshMkdirResponse>()?;
+    assert!(created_dir.parents);
+    assert!(Path::new(&created_dir.path).is_dir());
+
+    let written = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_write_file").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "path": sandbox.path.join("remote/nested/note.txt"),
+                    "content": "alpha\nbeta\n",
+                    "create_parent": true
+                })
+                .as_object()
+                .expect("ssh_write_file args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshWriteFileResponse>()?;
+    assert_eq!(written.bytes_written, "alpha\nbeta\n".len());
+    assert_eq!(
+        fs::read_to_string(&written.path)?,
+        "alpha\nbeta\n"
+    );
+
+    let appended = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_write_file").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "path": written.path,
+                    "content": "gamma\n",
+                    "append": true
+                })
+                .as_object()
+                .expect("ssh_write_file append args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshWriteFileResponse>()?;
+    assert!(appended.append);
+
+    let read = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_read_file").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "path": appended.path
+                })
+                .as_object()
+                .expect("ssh_read_file args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshReadFileResponse>()?;
+    assert_eq!(read.content, "alpha\nbeta\ngamma\n");
+
+    fs::write(sandbox.path.join("remote/.secret"), "hidden")?;
+    let listed = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_list_dir").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "path": sandbox.path.join("remote"),
+                    "include_hidden": true
+                })
+                .as_object()
+                .expect("ssh_list_dir args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshListDirResponse>()?;
+    assert!(listed.entries.iter().any(|entry| entry.name == "nested"));
+    assert!(listed.entries.iter().any(|entry| entry.name == ".secret"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_read_file_enforces_max_bytes() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("read_limit")?;
+    let ssh_path = sandbox.path.join("ssh");
+    write_fake_executable(
+        &ssh_path,
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nsh -lc \"$last\"\n",
+    )?;
+    fs::write(sandbox.path.join("big.txt"), "0123456789")?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    let app = Arc::new(AppState::new(config));
+    let server = PtyMcpServer::new(app);
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let connected = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_connect").with_arguments(
+                serde_json::json!({
+                    "host_alias": "devbox",
+                    "user": "alice",
+                    "description": "ssh read limit contract"
+                })
+                .as_object()
+                .expect("connect args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshConnectResponse>()?;
+
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_read_file").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "path": sandbox.path.join("big.txt"),
+                    "max_bytes": 4
+                })
+                .as_object()
+                .expect("ssh_read_file args object")
+                .clone(),
+            ),
+        )
+        .await?;
+    assert_eq!(result.is_error, Some(true));
+    let structured = result.structured_content.expect("structured error");
+    assert_eq!(structured["error_code"], "READ_FAILED");
+    assert_eq!(structured["message"], "remote file exceeds max_bytes");
 
     client.cancel().await?;
     server_handle.await??;
