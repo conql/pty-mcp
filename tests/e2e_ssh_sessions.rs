@@ -11,7 +11,7 @@ use std::{
 use anyhow::{Result, ensure};
 use pty_mcp::{
     mcp::tools::{
-        PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse,
+        PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse, SshExecResponse,
         SshSessionSpawnResponse,
     },
     session::SessionTransport,
@@ -138,7 +138,7 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
     ensure!(spawned_session.target_summary.as_deref() == Some("alice@devbox"));
 
     let exec_spawned = harness
-        .call_tool_typed::<SshSessionSpawnResponse>(
+        .call_tool_typed::<SshExecResponse>(
             "ssh_exec",
             json!({
                 "connection_id": connected.connection_id,

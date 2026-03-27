@@ -211,6 +211,15 @@ pub struct SshExecRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_for_completion_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_limit: Option<usize>,
+    #[schemars(
+        description = "Read view for returned output. Allowed values: plain | ansi | raw. Default: plain."
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_view: Option<ReadView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -224,6 +233,27 @@ pub struct SshSessionSpawnResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_cwd: Option<String>,
     pub started_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshExecResponse {
+    pub connection_id: SshConnectionId,
+    pub session_id: SessionId,
+    pub transport: SessionTransport,
+    pub status: SessionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_cwd: Option<String>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_signal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_output: Option<PtyOutputSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -666,6 +696,16 @@ impl PtyMcpServer {
         &self,
         Parameters(request): Parameters<SshExecRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let wait_for_completion_ms = request.wait_for_completion_ms;
+        let should_capture_initial_output = wait_for_completion_ms.is_some()
+            || request.output_limit.is_some()
+            || request.output_view.is_some();
+        let output_limit = request
+            .output_limit
+            .unwrap_or(self.app().config().default_read_limit)
+            .max(1);
+        let output_view =
+            resolve_buffer_view(request.output_view.clone().unwrap_or(ReadView::Plain));
         match self
             .app()
             .ssh_exec(AppSshExecRequest {
@@ -680,15 +720,70 @@ impl PtyMcpServer {
             })
             .await
         {
-            Ok(spawned) => structured(&SshSessionSpawnResponse {
-                connection_id: request.connection_id,
-                session_id: spawned.session_id,
-                transport: spawned.transport,
-                status: spawned.status,
-                target_summary: spawned.target_summary,
-                remote_cwd: spawned.remote_cwd,
-                started_at: spawned.started_at,
-            }),
+            Ok(spawned) => {
+                let wait_outcome = if let Some(timeout_ms) = wait_for_completion_ms {
+                    match self
+                        .app()
+                        .wait_session(
+                            &spawned.session_id,
+                            Some(std::time::Duration::from_millis(timeout_ms)),
+                        )
+                        .await
+                    {
+                        Ok(outcome) => Some(outcome),
+                        Err(error) => {
+                            return Ok::<CallToolResult, ErrorData>(tool_execution_error(error));
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let latest = self
+                    .app()
+                    .registry()
+                    .get(&spawned.session_id)
+                    .unwrap_or(spawned);
+
+                let initial_output = if should_capture_initial_output {
+                    match capture_initial_output(
+                        self.app(),
+                        &latest.session_id,
+                        wait_for_completion_ms.unwrap_or(0),
+                        output_limit,
+                        output_view,
+                    )
+                    .await
+                    {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => {
+                            return Ok::<CallToolResult, ErrorData>(tool_execution_error(error));
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                structured(&SshExecResponse {
+                    connection_id: request.connection_id,
+                    session_id: latest.session_id,
+                    transport: latest.transport,
+                    status: latest.status,
+                    target_summary: latest.target_summary,
+                    remote_cwd: latest.remote_cwd,
+                    started_at: latest.started_at,
+                    completed: wait_outcome.as_ref().map(|outcome| outcome.completed),
+                    exit_code: wait_outcome
+                        .as_ref()
+                        .and_then(|outcome| outcome.exit_info.as_ref())
+                        .and_then(|info| info.exit_code),
+                    exit_signal: wait_outcome
+                        .as_ref()
+                        .and_then(|outcome| outcome.exit_info.as_ref())
+                        .and_then(|info| info.exit_signal.clone()),
+                    initial_output,
+                })
+            }
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
