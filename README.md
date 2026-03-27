@@ -48,45 +48,58 @@ The server communicates over stdio and reads configuration from environment vari
 
 ## Typical Workflows
 
-### Local dev server in a persistent PTY
+These flows are best understood from the MCP client's point of view: an agent receives a task, decides whether it needs persistent terminal state, remote access, or a mounted workspace, and then keeps interacting with the same session instead of starting over each turn.
 
-Keep `pnpm dev`, `cargo watch`, test watchers, or REPL-like processes alive across MCP calls.
+### Scenario: keep a local dev process alive across turns
 
-```mermaid
-flowchart LR
-    A["pty_spawn"] --> B["pty_read"]
-    B --> C["pty_write"]
-    C --> B
-    B --> D["pty_wait / pty_kill"]
-```
-
-### Remote shell with persistent logs and interaction
-
-Run the process on the remote host, but keep a stable PTY session for reading output and sending follow-up input.
+Use this when the agent needs to start something like `pnpm dev`, `cargo watch`, a test watcher, or a REPL, then come back later to inspect logs or send more input.
 
 ```mermaid
 flowchart LR
-    A["ssh_connect"] --> B["ssh_session_spawn"]
-    B --> C["pty_read"]
-    C --> D["pty_write"]
-    D --> C
-    C --> E["pty_kill"]
-    E --> F["ssh_disconnect"]
-```
-
-### Remote mount plus remote execution for near-local development
-
-Mount the remote project locally for editing, while commands still run on the remote machine.
-
-```mermaid
-flowchart LR
-    A["ssh_connect"] --> B["ssh_mount"]
-    B --> C["Local editor / local search"]
-    A --> D["ssh_session_spawn / ssh_exec"]
-    D --> E["pty_read"]
-    C --> F["Edit mounted files"]
+    A["Agent receives a local task<br/>Run a dev server / watcher / REPL"] --> B{"Does the task need process state<br/>to survive across turns?"}
+    B -- "Yes" --> C["pty_spawn<br/>Start one persistent local shell/process"]
+    C --> D["pty_read<br/>Inspect startup logs and current state"]
+    D --> E{"Need to interact,<br/>retry, or provide more input?"}
+    E -- "Yes" --> F["pty_write<br/>Send command, keystrokes, or stdin"]
     F --> D
-    E --> G["ssh_unmount / ssh_disconnect"]
+    E -- "No, just observe" --> G{"Still running?"}
+    G -- "Yes" --> D
+    G -- "Finished / should stop" --> H["pty_wait or pty_kill"]
+```
+
+### Scenario: investigate or operate on a remote machine interactively
+
+Use this when the agent needs a real remote shell that it can return to, instead of one-shot SSH execution with no retained terminal state.
+
+```mermaid
+flowchart LR
+    A["Agent receives a remote task<br/>Check logs / run deployment / debug service"] --> B["ssh_connect<br/>Establish or reuse SSH connection"]
+    B --> C{"Need an interactive remote shell<br/>with persistent terminal state?"}
+    C -- "Yes" --> D["ssh_session_spawn<br/>Create remote PTY session"]
+    D --> E["pty_read<br/>Read remote output incrementally"]
+    E --> F{"Need follow-up commands,<br/>answers, or shell input?"}
+    F -- "Yes" --> G["pty_write<br/>Continue in the same remote session"]
+    G --> E
+    F -- "No" --> H{"Task complete?"}
+    H -- "Not yet" --> E
+    H -- "Yes" --> I["pty_kill if needed<br/>ssh_disconnect when done"]
+```
+
+### Scenario: edit locally, execute remotely
+
+Use this when the agent wants local-quality file access for search and editing, while still running build, test, or runtime commands on the remote host.
+
+```mermaid
+flowchart LR
+    A["Agent receives a remote code task"] --> B["ssh_connect"]
+    B --> C{"Would local editing/search be easier<br/>if the remote project were mounted?"}
+    C -- "Yes" --> D["ssh_mount<br/>Expose remote project as local files"]
+    D --> E["Agent reads, searches, and edits mounted files locally"]
+    E --> F["ssh_session_spawn or ssh_exec<br/>Run commands on the remote host"]
+    F --> G["pty_read<br/>Inspect build/test/runtime output"]
+    G --> H{"Need another edit or rerun?"}
+    H -- "Yes" --> E
+    H -- "No" --> I["ssh_unmount and ssh_disconnect"]
 ```
 
 ## Tool Surface
