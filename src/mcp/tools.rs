@@ -16,8 +16,8 @@ use crate::{
     buffer::{BufferReadPage, BufferReadRequest, BufferView},
     session::{ReadView, SessionId, SessionStatus, SessionSummary, SessionTransport, SignalKind},
     ssh::{
-        SshAuthKind, SshCapabilityView, SshConnectionId, SshConnectionStatus, SshConnectionSummary,
-        SshMountBackend, SshMountId, SshMountStatus, SshMountSummary, SshTarget,
+        SshAuthKind, SshConnectionId, SshConnectionStatus, SshConnectionSummary, SshMountBackend,
+        SshMountId, SshMountStatus, SshMountSummary, SshTarget,
     },
 };
 
@@ -166,7 +166,6 @@ pub struct SshConnectResponse {
     pub target: SshTarget,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub reused: bool,
-    pub capabilities: SshCapabilityView,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -573,7 +572,7 @@ impl PtyMcpServer {
 
     #[tool(
         name = "ssh_connect",
-        description = "Create or reuse an SSH connection handle and return capability information.",
+        description = "Create or reuse an SSH connection handle.",
         execution(task_support = "optional")
     )]
     pub async fn ssh_connect(
@@ -602,7 +601,6 @@ impl PtyMcpServer {
                 target: result.connection.target,
                 started_at: result.connection.started_at,
                 reused: result.reused,
-                capabilities: result.connection.capabilities,
             }),
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }

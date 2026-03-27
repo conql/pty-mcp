@@ -59,7 +59,6 @@ pub struct SshConnectResult {
 pub struct SshListResult {
     pub connections: Vec<SshConnectionSummary>,
     pub mounts: Vec<SshMountSummary>,
-    pub capabilities: SshCapabilityView,
 }
 
 #[derive(Debug, Clone)]
@@ -266,8 +265,7 @@ impl AppState {
     }
 
     pub fn ssh_create_placeholder_connection(&self, target: SshTarget) -> SshConnectionSummary {
-        self.ssh_registry
-            .create_placeholder_connection(target, self.ssh_capabilities.clone())
+        self.ssh_registry.create_placeholder_connection(target)
     }
 
     pub async fn ssh_connect(&self, request: SshConnectRequest) -> Result<SshConnectResult> {
@@ -378,7 +376,6 @@ impl AppState {
             last_used_at: Some(Utc::now()),
             active_session_count: 0,
             active_mount_count: 0,
-            capabilities: self.ssh_capabilities.clone(),
             metadata: Default::default(),
         };
         self.ssh_registry.upsert_connection(summary.clone());
@@ -405,7 +402,6 @@ impl AppState {
         SshListResult {
             connections: self.ssh_list_connections(),
             mounts: self.ssh_list_mounts(),
-            capabilities: self.ssh_capabilities.clone(),
         }
     }
 

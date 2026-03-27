@@ -75,10 +75,6 @@ fn app_state_exposes_ssh_registry_connection_summary() {
     assert_eq!(fetched.status, SshConnectionStatus::Connecting);
     assert_eq!(fetched.active_session_count, 0);
     assert_eq!(fetched.active_mount_count, 0);
-    assert_eq!(
-        fetched.capabilities.platform,
-        app.ssh_capabilities().platform
-    );
 }
 
 #[test]

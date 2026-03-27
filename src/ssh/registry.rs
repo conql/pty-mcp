@@ -9,8 +9,8 @@ use chrono::Utc;
 use crate::session::SessionId;
 
 use super::model::{
-    SshCapabilityView, SshConnectionId, SshConnectionStatus, SshConnectionSummary, SshMountBackend,
-    SshMountId, SshMountStatus, SshMountSummary, SshTarget,
+    SshConnectionId, SshConnectionStatus, SshConnectionSummary, SshMountBackend, SshMountId,
+    SshMountStatus, SshMountSummary, SshTarget,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -416,11 +416,7 @@ impl SshRegistry {
         Ok(())
     }
 
-    pub fn create_placeholder_connection(
-        &self,
-        target: SshTarget,
-        capabilities: SshCapabilityView,
-    ) -> SshConnectionSummary {
+    pub fn create_placeholder_connection(&self, target: SshTarget) -> SshConnectionSummary {
         let summary = SshConnectionSummary {
             connection_id: SshConnectionId::new(),
             title: None,
@@ -433,7 +429,6 @@ impl SshRegistry {
             last_used_at: None,
             active_session_count: 0,
             active_mount_count: 0,
-            capabilities,
             metadata: Default::default(),
         };
         self.upsert_connection(summary.clone());

@@ -231,7 +231,6 @@ pub struct SshConnectionSummary {
     pub last_used_at: Option<DateTime<Utc>>,
     pub active_session_count: usize,
     pub active_mount_count: usize,
-    pub capabilities: SshCapabilityView,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub metadata: Map<String, Value>,
 }

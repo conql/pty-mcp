@@ -63,18 +63,6 @@ fn ssh_capability_view_serializes_structured_binary_capabilities() {
 
 #[test]
 fn ssh_connection_summary_contains_structured_target_and_counts() {
-    let capabilities = SshCapabilityView {
-        platform: "linux".to_string(),
-        ssh: SshBinaryCapability {
-            available: true,
-            path: Some("/usr/bin/ssh".to_string()),
-            version: Some("OpenSSH_9.8".to_string()),
-        },
-        sshfs: SshBinaryCapability::default(),
-        unmount: SshBinaryCapability::default(),
-        diskutil: None,
-        macfuse: None,
-    };
     let summary = SshConnectionSummary {
         connection_id: SshConnectionId::new(),
         title: Some("Devbox".to_string()),
@@ -92,7 +80,6 @@ fn ssh_connection_summary_contains_structured_target_and_counts() {
         last_used_at: Some(Utc::now()),
         active_session_count: 3,
         active_mount_count: 1,
-        capabilities,
         metadata: Map::from_iter([("environment".to_string(), json!("dev"))]),
     };
 
@@ -103,7 +90,6 @@ fn ssh_connection_summary_contains_structured_target_and_counts() {
     assert_eq!(value["target_summary"], "alice@devbox:22");
     assert_eq!(value["active_session_count"], 3);
     assert_eq!(value["active_mount_count"], 1);
-    assert_eq!(value["capabilities"]["ssh"]["available"], true);
     assert_eq!(value["metadata"]["environment"], "dev");
 }
 
