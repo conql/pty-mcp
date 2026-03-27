@@ -49,10 +49,16 @@ fn default_target() -> SshTarget {
 fn write_fake_executable(path: &Path, body: &str) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    fs::write(path, body)?;
-    let mut permissions = fs::metadata(path)?.permissions();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock before unix epoch")
+        .as_nanos();
+    let tmp_path = path.with_extension(format!("tmp-{}-{nanos}", std::process::id()));
+    fs::write(&tmp_path, body)?;
+    let mut permissions = fs::metadata(&tmp_path)?.permissions();
     permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions)?;
+    fs::set_permissions(&tmp_path, permissions)?;
+    fs::rename(&tmp_path, path)?;
     Ok(())
 }
 
