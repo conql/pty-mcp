@@ -1,7 +1,11 @@
-use rmcp::{Json, handler::server::wrapper::Parameters, model::CallToolResult, tool, tool_router};
+use anyhow::Error as AnyError;
+use rmcp::{
+    ErrorData, Json, handler::server::wrapper::Parameters, model::CallToolResult, tool,
+    tool_router,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::to_value;
+use serde_json::{json, to_value};
 
 use crate::{
     AppState, SpawnSessionRequest,
@@ -407,9 +411,28 @@ pub struct PtyWaitResponse {
 
 fn structured<T: Serialize>(value: &T) -> Result<CallToolResult, rmcp::ErrorData> {
     let value = to_value(value).map_err(|error| {
-        rmcp::ErrorData::internal_error(format!("failed to serialize tool result: {error}"), None)
+        ErrorData::internal_error(format!("failed to serialize tool result: {error}"), None)
     })?;
     Ok(CallToolResult::structured(value))
+}
+
+// `ErrorData` is reserved for MCP protocol failures such as invalid params or
+// serialization issues. Tool execution failures must flow through
+// `CallToolResult` with `is_error = true`.
+fn tool_execution_error(error: AnyError) -> CallToolResult {
+    let mut body = json!({
+        "message": error.to_string(),
+    });
+
+    if let Some(error) = error.downcast_ref::<crate::PtyError>() {
+        body["message"] = json!(error.message);
+        body["error_code"] = json!(error.error_code.as_str());
+        if let Some(details) = &error.details {
+            body["details"] = details.clone();
+        }
+    }
+
+    CallToolResult::structured_error(body)
 }
 
 #[tool_router(router = tool_router, vis = "pub(crate)")]
@@ -451,7 +474,7 @@ impl PtyMcpServer {
                         resolve_buffer_view(request.output_view.unwrap_or(ReadView::Plain)),
                     )
                     .await
-                    .map_err(|error| rmcp::ErrorData::internal_error(error.to_string(), None))?
+                    .map_err(|error| ErrorData::internal_error(error.to_string(), None))?
                 } else {
                     None
                 };
@@ -472,7 +495,7 @@ impl PtyMcpServer {
                     initial_output,
                 })
             }
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -500,7 +523,7 @@ impl PtyMcpServer {
                 accepted: outcome.accepted,
                 status: outcome.status,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -539,7 +562,7 @@ impl PtyMcpServer {
                     .unwrap_or(SessionStatus::Exited);
                 structured(&read_response_from_page(request.session_id, status, page))
             }
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -587,7 +610,7 @@ impl PtyMcpServer {
                 reused: result.reused,
                 capabilities: result.connection.capabilities,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -638,7 +661,7 @@ impl PtyMcpServer {
                 remote_cwd: spawned.remote_cwd,
                 started_at: spawned.started_at,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -674,7 +697,7 @@ impl PtyMcpServer {
                 remote_cwd: spawned.remote_cwd,
                 started_at: spawned.started_at,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -710,7 +733,7 @@ impl PtyMcpServer {
                 status: mount.status,
                 mounted_at: mount.mounted_at,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -739,7 +762,7 @@ impl PtyMcpServer {
                 local_path: result.mount.local_path,
                 cleanup_local_path: result.cleanup_local_path,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -768,7 +791,7 @@ impl PtyMcpServer {
                 closed_sessions: result.closed_sessions,
                 closed_mounts: result.closed_mounts,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -796,7 +819,7 @@ impl PtyMcpServer {
                 content: result.content,
                 bytes_read: result.bytes_read,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -826,7 +849,7 @@ impl PtyMcpServer {
                 bytes_written: result.bytes_written,
                 append: result.append,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -868,7 +891,7 @@ impl PtyMcpServer {
                     })
                     .collect(),
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -895,7 +918,7 @@ impl PtyMcpServer {
                 path: result.path,
                 parents: result.parents,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -923,7 +946,7 @@ impl PtyMcpServer {
                 current_status: outcome.current_status,
                 cleanup: outcome.cleanup,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 
@@ -954,7 +977,7 @@ impl PtyMcpServer {
                     .and_then(|info| info.exit_signal.clone()),
                 last_output_preview: outcome.last_output_preview,
             }),
-            Err(error) => Ok::<CallToolResult, rmcp::ErrorData>(error.to_call_tool_result()),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
         }
     }
 }

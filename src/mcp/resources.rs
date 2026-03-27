@@ -18,6 +18,17 @@ const SSH_CONNECTIONS_URI: &str = "ssh://connections";
 const SSH_MOUNTS_URI: &str = "ssh://mounts";
 const TAIL_LINE_COUNT: usize = 100;
 
+// `ErrorData` is only used at the MCP resource protocol boundary.
+// Missing resources map to `resource_not_found`; unexpected read failures map
+// to `internal_error`.
+fn resource_not_found() -> ErrorData {
+    ErrorData::resource_not_found("resource not found", None)
+}
+
+fn internal_resource_error(error: impl std::fmt::Display) -> ErrorData {
+    ErrorData::internal_error(format!("failed to read resource: {error}"), None)
+}
+
 pub fn list_resources(app: &AppState) -> ListResourcesResult {
     let mut resources = vec![
         RawResource::new(SESSIONS_URI, "sessions")
@@ -136,7 +147,7 @@ pub fn read_resource(app: &AppState, uri: &str) -> Result<ReadResourceResult, Er
         _ if uri.starts_with("pty://sessions/") => read_session_resource(app, uri)?,
         _ if uri.starts_with("ssh://connections/") => read_ssh_connection_resource(app, uri)?,
         _ if uri.starts_with("ssh://mounts/") => read_ssh_mount_resource(app, uri)?,
-        _ => return Err(ErrorData::resource_not_found("resource not found", None)),
+        _ => return Err(resource_not_found()),
     };
 
     Ok(ReadResourceResult::new(vec![contents]))
@@ -145,12 +156,12 @@ pub fn read_resource(app: &AppState, uri: &str) -> Result<ReadResourceResult, Er
 fn read_session_resource(app: &AppState, uri: &str) -> Result<ResourceContents, ErrorData> {
     let path = uri
         .strip_prefix("pty://sessions/")
-        .ok_or_else(|| ErrorData::resource_not_found("resource not found", None))?;
+        .ok_or_else(resource_not_found)?;
     let mut segments = path.split('/');
     let session_id = segments
         .next()
         .filter(|segment| !segment.is_empty())
-        .ok_or_else(|| ErrorData::resource_not_found("resource not found", None))?;
+        .ok_or_else(resource_not_found)?;
     let remainder = segments.next();
 
     let session = app
@@ -158,7 +169,7 @@ fn read_session_resource(app: &AppState, uri: &str) -> Result<ResourceContents, 
         .list()
         .into_iter()
         .find(|summary| summary.session_id.as_str() == session_id)
-        .ok_or_else(|| ErrorData::resource_not_found("resource not found", None))?;
+        .ok_or_else(resource_not_found)?;
 
     match remainder {
         None => Ok(json_contents(
@@ -177,7 +188,7 @@ fn read_session_resource(app: &AppState, uri: &str) -> Result<ResourceContents, 
                         view: BufferView::Plain,
                     },
                 )
-                .map_err(|error| ErrorData::resource_not_found(error.to_string(), None))?;
+                .map_err(internal_resource_error)?;
 
             Ok(json_contents(
                 uri,
@@ -210,7 +221,7 @@ fn read_session_resource(app: &AppState, uri: &str) -> Result<ResourceContents, 
                         view: BufferView::Plain,
                     },
                 )
-                .map_err(|error| ErrorData::resource_not_found(error.to_string(), None))?;
+                .map_err(internal_resource_error)?;
 
             Ok(json_contents(
                 uri,
@@ -226,7 +237,7 @@ fn read_session_resource(app: &AppState, uri: &str) -> Result<ResourceContents, 
                 }),
             ))
         }
-        _ => Err(ErrorData::resource_not_found("resource not found", None)),
+        _ => Err(resource_not_found()),
     }
 }
 
@@ -234,12 +245,12 @@ fn read_ssh_connection_resource(app: &AppState, uri: &str) -> Result<ResourceCon
     let connection_id = uri
         .strip_prefix("ssh://connections/")
         .filter(|id| !id.is_empty() && !id.contains('/'))
-        .ok_or_else(|| ErrorData::resource_not_found("resource not found", None))?;
+        .ok_or_else(resource_not_found)?;
     let connection_id = crate::ssh::SshConnectionId::from_str(connection_id)
-        .map_err(|_| ErrorData::resource_not_found("resource not found", None))?;
+        .map_err(|_| resource_not_found())?;
     let connection = app
         .ssh_get_connection(&connection_id)
-        .ok_or_else(|| ErrorData::resource_not_found("resource not found", None))?;
+        .ok_or_else(resource_not_found)?;
 
     Ok(json_contents(
         uri,
@@ -251,12 +262,12 @@ fn read_ssh_mount_resource(app: &AppState, uri: &str) -> Result<ResourceContents
     let mount_id = uri
         .strip_prefix("ssh://mounts/")
         .filter(|id| !id.is_empty() && !id.contains('/'))
-        .ok_or_else(|| ErrorData::resource_not_found("resource not found", None))?;
+        .ok_or_else(resource_not_found)?;
     let mount_id = crate::ssh::SshMountId::from_str(mount_id)
-        .map_err(|_| ErrorData::resource_not_found("resource not found", None))?;
+        .map_err(|_| resource_not_found())?;
     let mount = app
         .ssh_get_mount(&mount_id)
-        .ok_or_else(|| ErrorData::resource_not_found("resource not found", None))?;
+        .ok_or_else(resource_not_found)?;
 
     Ok(json_contents(
         uri,
