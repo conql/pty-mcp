@@ -360,6 +360,14 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
             .expect("ssh_session_spawn properties")
             .contains_key("script")
     );
+    let session_spawn_properties = session_spawn
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("ssh_session_spawn properties");
+    assert!(session_spawn_properties.contains_key("wait_for_output_ms"));
+    assert!(session_spawn_properties.contains_key("output_limit"));
+    assert!(session_spawn_properties.contains_key("output_view"));
 
     let mount_required = mount
         .input_schema
@@ -720,11 +728,13 @@ async fn ssh_session_spawn_reuses_pty_path_and_enriches_pty_list() -> anyhow::Re
                 serde_json::json!({
                     "connection_id": connected.connection_id,
                     "command": "printf",
-                    "args": ["remote-command"],
+                    "args": ["remote-command\\n"],
                     "cwd": "/srv/project",
                     "env": {"TERM":"xterm-256color"},
                     "interactive": true,
-                    "description": "remote shell"
+                    "description": "remote shell",
+                    "wait_for_output_ms": 500,
+                    "output_limit": 20
                 })
                 .as_object()
                 .expect("session spawn args object")
@@ -738,6 +748,12 @@ async fn ssh_session_spawn_reuses_pty_path_and_enriches_pty_list() -> anyhow::Re
     assert_eq!(spawned.transport, pty_mcp::session::SessionTransport::Ssh);
     assert_eq!(spawned.remote_cwd.as_deref(), Some("/srv/project"));
     assert_eq!(spawned.target_summary.as_deref(), Some("alice@devbox"));
+    assert!(spawned.initial_output.as_ref().is_some_and(|snapshot| {
+        snapshot
+            .lines
+            .iter()
+            .any(|line| line.text.contains("remote-ready"))
+    }));
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 

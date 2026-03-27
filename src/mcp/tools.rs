@@ -194,6 +194,15 @@ pub struct SshSessionSpawnRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_for_output_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_limit: Option<usize>,
+    #[schemars(
+        description = "Read view for initial output. Allowed values: plain | ansi | raw. Default: plain."
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_view: Option<ReadView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -224,6 +233,8 @@ pub struct SshSessionSpawnResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_cwd: Option<String>,
     pub started_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_output: Option<PtyOutputSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -628,6 +639,9 @@ impl PtyMcpServer {
         &self,
         Parameters(request): Parameters<SshSessionSpawnRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let should_capture_initial_output = request.wait_for_output_ms.is_some()
+            || request.output_limit.is_some()
+            || request.output_view.is_some();
         match self
             .app()
             .ssh_session_spawn(AppSshSessionSpawnRequest {
@@ -644,15 +658,41 @@ impl PtyMcpServer {
             })
             .await
         {
-            Ok(spawned) => structured(&SshSessionSpawnResponse {
-                connection_id: request.connection_id,
-                session_id: spawned.session_id,
-                transport: spawned.transport,
-                status: spawned.status,
-                target_summary: spawned.target_summary,
-                remote_cwd: spawned.remote_cwd,
-                started_at: spawned.started_at,
-            }),
+            Ok(spawned) => {
+                let initial_output = if should_capture_initial_output {
+                    capture_initial_output(
+                        self.app(),
+                        &spawned.session_id,
+                        request.wait_for_output_ms.unwrap_or(0),
+                        request
+                            .output_limit
+                            .unwrap_or(self.app().config().default_read_limit)
+                            .max(1),
+                        resolve_buffer_view(request.output_view.unwrap_or(ReadView::Plain)),
+                    )
+                    .await
+                    .map_err(|error| ErrorData::internal_error(error.to_string(), None))?
+                } else {
+                    None
+                };
+
+                let latest = self
+                    .app()
+                    .registry()
+                    .get(&spawned.session_id)
+                    .unwrap_or(spawned);
+
+                structured(&SshSessionSpawnResponse {
+                    connection_id: request.connection_id,
+                    session_id: latest.session_id,
+                    transport: latest.transport,
+                    status: latest.status,
+                    target_summary: latest.target_summary,
+                    remote_cwd: latest.remote_cwd,
+                    started_at: latest.started_at,
+                    initial_output,
+                })
+            }
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
@@ -688,6 +728,7 @@ impl PtyMcpServer {
                 target_summary: spawned.target_summary,
                 remote_cwd: spawned.remote_cwd,
                 started_at: spawned.started_at,
+                initial_output: None,
             }),
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }

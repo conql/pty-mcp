@@ -132,6 +132,7 @@ flowchart LR
 - `ssh_connect`: create or reuse an SSH connection handle
 - `ssh_list`: list SSH connections and mounts
 - `ssh_session_spawn`: start a remote PTY session over an existing SSH connection
+  - optional `wait_for_output_ms`: wait briefly for initial remote PTY output and return it inline as `initial_output`
 - `ssh_exec`: run a remote script over an existing SSH connection
 - `ssh_read_file`: read a UTF-8 text file from the remote host
 - `ssh_write_file`: write a UTF-8 text file to the remote host
