@@ -265,7 +265,82 @@ tests/
 
 当前默认 CI 不依赖真实 SSH 环境，也没有独立的 real SSH acceptance 层。
 
-## 7. 当前 CI/本地运行方式
+## 7. 未覆盖项执行清单
+
+下面这份清单把“还没被 deterministic E2E 覆盖”的点整理成后续可直接落地的任务。标记说明：
+
+- `[高]` = 建议优先补
+- `[中]` = 有价值，但不阻塞当前主干
+- `[低]` = 偏增强型补充
+- `非 E2E 已覆盖` = 仓库里已有单元测试、contract 测试或模块级集成测试，但还没有真实二进制 stdio E2E
+- `完全未覆盖` = 当前仓库里也没有找到对应的现成测试覆盖
+
+### 7.1 PTY E2E 补测
+
+- [x] `[高]` 为 `pty_read` 增加 `view = ansi` 的真实 E2E，验证 ANSI 输出保真且可被 pattern 匹配
+  - 当前状态：非 E2E 已覆盖
+- [x] `[高]` 为 `pty_read` 增加 `view = raw` 的真实 E2E，验证控制字符转义后的读取结果
+  - 当前状态：非 E2E 已覆盖
+- [x] `[高]` 为 `pty_read` 增加 `ignore_case = true` 的真实 E2E
+  - 当前状态：非 E2E 已覆盖
+- [x] `[中]` 增加“会话正常退出后仍可读取 retained buffer”的真实 E2E
+  - 当前状态：完全未覆盖
+- [x] `[中]` 把资源与 `pty_list` 一致性断言扩展到更多状态变更场景
+  - 例如：正常退出、`cleanup = false` 保留、SSH-backed session 完成后
+  - 当前状态：完全未覆盖
+
+### 7.2 配置与权限 E2E 补测
+
+- [x] `[高]` 为 `PTY_MCP_DENIED_COMMANDS` 增加 `Config::from_env()` 到真实 tool 边界的 E2E
+  - 当前状态：完全未覆盖
+- [x] `[高]` 为 `PTY_MCP_DENIED_ENV_VARS` 增加 `Config::from_env()` 到真实 tool 边界的 E2E
+  - 当前状态：完全未覆盖
+- [x] `[中]` 补充更多错误配置格式的启动失败分支
+  - 例如：deny/allow 列表格式错误、数值型配置错误、SSH 相关配置冲突
+  - 当前状态：完全未覆盖
+
+### 7.3 SSH 连接与策略 E2E 补测
+
+- [ ] `[高]` 增加缺失 `ssh` capability 时 `ssh_connect` 的真实二进制 E2E
+  - 当前状态：非 E2E 已覆盖
+- [ ] `[高]` 增加 host/user/port/auth policy 拒绝行为的真实 E2E
+  - 当前状态：非 E2E 已覆盖
+- [ ] `[高]` 增加 `verify_host_key = true` 的 fake `ssh` 透传检查
+  - 当前状态：完全未覆盖
+
+### 7.4 SSH 会话 E2E 补测
+
+- [ ] `[高]` 增加 `shell` / `login` / `interactive` 组合透传的真实 E2E
+  - 建议至少覆盖：`interactive = false`、`login = true`、显式 `shell`
+  - 当前状态：完全未覆盖
+- [ ] `[中]` 为 `ssh_session_spawn` / `ssh_exec` 响应增加 `target_summary` 断言
+  - 当前状态：非 E2E 已覆盖
+- [ ] `[中]` 为 `pty_list` 中 SSH session summary 增加 `remote_command` 断言
+  - 当前状态：非 E2E 已覆盖
+- [ ] `[中]` 增加 home-relative cwd 的真实 E2E 专项断言
+  - 当前状态：非 E2E 已覆盖
+
+### 7.5 SSH 挂载 E2E 补测
+
+- [ ] `[高]` 增加 managed mount path 与 explicit path 在 cleanup 行为上的差异 E2E
+  - 当前状态：非 E2E 已覆盖
+- [ ] `[高]` 增加缺失 `sshfs` capability 时 `ssh_mount` 失败的真实 E2E
+  - 当前状态：非 E2E 已覆盖
+- [ ] `[中]` 增加 mount 失败后 `ssh://mounts` 或 `ssh_list` 侧 failed summary / `last_error` 的真实 E2E
+  - 当前状态：非 E2E 已覆盖
+- [ ] `[中]` 增加 `ssh_unmount` tool 的真实 E2E
+  - 当前状态：非 E2E 已覆盖
+- [ ] `[中]` 增加 server shutdown 自动卸载 managed mounts 的真实 E2E
+  - 当前状态：非 E2E 已覆盖
+
+### 7.6 Real SSH Acceptance
+
+- [ ] `[低]` 设计并落地独立的 real SSH acceptance 层
+  - 例如新增 `tests/e2e_real_ssh.rs` 或单独的 opt-in suite
+  - 默认 CI 继续保持不依赖外部网络
+  - 当前状态：完全未覆盖
+
+## 8. 当前 CI/本地运行方式
 
 当前 deterministic E2E 可以显式运行：
 
@@ -279,7 +354,7 @@ cargo test --test e2e_bootstrap --test e2e_policy --test e2e_pty --test e2e_reso
 - 不依赖真实远端主机
 - 依赖 Unix 测试环境
 
-## 8. 结论
+## 9. 结论
 
 当前 deterministic E2E 主干已经建成，并且已经覆盖了最关键的真实边界：
 

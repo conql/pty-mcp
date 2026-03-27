@@ -6,10 +6,7 @@ use anyhow::{Result, ensure};
 use pty_mcp::mcp::tools::{SshConnectResponse, SshListResponse};
 use serde_json::json;
 
-use support::{
-    assertions::assert_text_contains,
-    e2e_harness::E2eHarness,
-};
+use support::{assertions::assert_text_contains, e2e_harness::E2eHarness};
 
 #[tokio::test]
 async fn ssh_connect_reuses_existing_connection_and_logs_options() -> Result<()> {

@@ -45,11 +45,14 @@ pub fn resolve_binary_path() -> Result<PathBuf> {
         return Ok(path);
     }
 
-    let current_exe = std::env::current_exe().context("failed to resolve current test executable")?;
-    let debug_dir = current_exe
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| anyhow!("failed to derive target/debug from {}", current_exe.display()))?;
+    let current_exe =
+        std::env::current_exe().context("failed to resolve current test executable")?;
+    let debug_dir = current_exe.parent().and_then(Path::parent).ok_or_else(|| {
+        anyhow!(
+            "failed to derive target/debug from {}",
+            current_exe.display()
+        )
+    })?;
     let candidate = debug_dir.join(format!("pty-mcp{}", std::env::consts::EXE_SUFFIX));
     ensure!(
         candidate.is_file(),
@@ -184,7 +187,10 @@ impl E2eHarness {
             .list_all_tools()
             .await
             .context("failed to list tools")?;
-        Ok(tools.into_iter().map(|tool| tool.name.to_string()).collect())
+        Ok(tools
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect())
     }
 
     pub async fn list_resource_uris(&self) -> Result<Vec<String>> {
@@ -223,9 +229,9 @@ impl E2eHarness {
             return Err(anyhow!("tool {name} returned error result: {description}"));
         }
 
-        result
-            .into_typed::<T>()
-            .with_context(|| format!("failed to decode tool result for {name}; result={description}"))
+        result.into_typed::<T>().with_context(|| {
+            format!("failed to decode tool result for {name}; result={description}")
+        })
     }
 
     pub async fn call_tool_error(&self, name: &str, args: Value) -> Result<Value> {
@@ -358,7 +364,10 @@ impl Drop for E2eHarness {
     }
 }
 
-fn spawn_stderr_capture(stderr: ChildStderr, buffer: Arc<Mutex<String>>) -> tokio::task::JoinHandle<()> {
+fn spawn_stderr_capture(
+    stderr: ChildStderr,
+    buffer: Arc<Mutex<String>>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut reader = stderr;
         let mut bytes = Vec::new();

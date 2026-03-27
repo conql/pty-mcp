@@ -8,10 +8,7 @@ use pty_mcp::mcp::tools::{
 };
 use serde_json::json;
 
-use support::{
-    assertions::assert_text_contains,
-    e2e_harness::E2eHarness,
-};
+use support::{assertions::assert_text_contains, e2e_harness::E2eHarness};
 
 #[tokio::test]
 async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()> {
@@ -54,7 +51,11 @@ async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()>
         )
         .await?;
     ensure!(std::path::Path::new(&mounted.local_path).exists());
-    ensure!(std::path::Path::new(&mounted.local_path).join(".sshfs-mounted").exists());
+    ensure!(
+        std::path::Path::new(&mounted.local_path)
+            .join(".sshfs-mounted")
+            .exists()
+    );
 
     let disconnected = harness
         .call_tool_typed::<SshDisconnectResponse>(
@@ -80,7 +81,11 @@ async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()>
             .all(|session| session.session_id != spawned.session_id)
     );
 
-    assert_text_contains(&harness.fake_bins().read_sshfs_log(), "/srv/project", "sshfs log")?;
+    assert_text_contains(
+        &harness.fake_bins().read_sshfs_log(),
+        "/srv/project",
+        "sshfs log",
+    )?;
     assert_text_contains(
         &harness.fake_bins().read_umount_log(),
         &mounted.local_path,

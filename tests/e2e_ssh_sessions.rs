@@ -4,7 +4,10 @@ mod support;
 
 use anyhow::{Result, ensure};
 use pty_mcp::{
-    mcp::tools::{PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse, SshSessionSpawnResponse},
+    mcp::tools::{
+        PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse,
+        SshSessionSpawnResponse,
+    },
     session::SessionTransport,
 };
 use serde_json::json;

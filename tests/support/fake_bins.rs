@@ -19,11 +19,8 @@ impl TempSandbox {
             .duration_since(UNIX_EPOCH)
             .expect("clock before unix epoch")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "pty_mcp_{prefix}_{}_{}",
-            std::process::id(),
-            nanos
-        ));
+        let root =
+            std::env::temp_dir().join(format!("pty_mcp_{prefix}_{}_{}", std::process::id(), nanos));
         fs::create_dir_all(&root)?;
         Ok(Self { root })
     }

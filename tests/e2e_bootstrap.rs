@@ -64,14 +64,64 @@ async fn binary_bootstraps_and_exposes_core_protocol_surface() -> Result<()> {
 
 #[tokio::test]
 async fn invalid_env_configuration_fails_at_startup_with_diagnostics() -> Result<()> {
+    let cases = [
+        (
+            "invalid ssh port range",
+            vec![
+                ("PTY_MCP_SSH_PORT_MIN", "99"),
+                ("PTY_MCP_SSH_PORT_MAX", "12"),
+            ],
+            "invalid SSH port range",
+        ),
+        (
+            "invalid session limit",
+            vec![("PTY_MCP_SESSION_LIMIT", "abc")],
+            "invalid usize for PTY_MCP_SESSION_LIMIT",
+        ),
+        (
+            "invalid ssh explicit mount bool",
+            vec![("PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS", "maybe")],
+            "invalid bool for PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS",
+        ),
+        (
+            "invalid ssh auth kind",
+            vec![("PTY_MCP_SSH_ALLOWED_AUTH_KINDS", "magic")],
+            "invalid ssh auth kind for PTY_MCP_SSH_ALLOWED_AUTH_KINDS",
+        ),
+    ];
+
+    for (label, envs, expected_stderr) in cases {
+        let (status, stderr) = spawn_with_env_and_capture_stderr(&envs).await?;
+
+        ensure!(
+            !status.success(),
+            "misconfigured pty-mcp unexpectedly succeeded: case={label} stderr={stderr:?}"
+        );
+        ensure!(
+            stderr.contains(expected_stderr),
+            "stderr missing expected diagnostic: case={label} expected={expected_stderr:?} actual={stderr:?}"
+        );
+    }
+
+    Ok(())
+}
+
+async fn spawn_with_env_and_capture_stderr(
+    envs: &[(&str, &str)],
+) -> Result<(std::process::ExitStatus, String)> {
     let bin = resolve_binary_path()?;
 
-    let mut child = Command::new(bin)
-        .env("PTY_MCP_SSH_PORT_MIN", "99")
-        .env("PTY_MCP_SSH_PORT_MAX", "12")
+    let mut command = Command::new(bin);
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+
+    let mut child = command
         .spawn()
         .context("failed to spawn misconfigured pty-mcp")?;
 
@@ -80,11 +130,5 @@ async fn invalid_env_configuration_fails_at_startup_with_diagnostics() -> Result
         pipe.read_to_string(&mut stderr).await?;
     }
     let status = child.wait().await?;
-
-    ensure!(!status.success(), "misconfigured pty-mcp unexpectedly succeeded");
-    ensure!(
-        stderr.contains("invalid SSH port range"),
-        "stderr missing invalid range diagnostic: {stderr:?}"
-    );
-    Ok(())
+    Ok((status, stderr))
 }
