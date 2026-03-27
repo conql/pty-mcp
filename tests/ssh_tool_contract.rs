@@ -4,8 +4,9 @@ use pty_mcp::{
     app::SshDisconnectRequest,
     mcp::tools::{
         PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse,
-        SshDisconnectResponse, SshListDirResponse, SshListResponse, SshMkdirResponse,
-        SshMountResponse, SshReadFileResponse, SshSessionSpawnResponse, SshWriteFileResponse,
+        SshDisconnectResponse, SshExecResponse, SshListDirResponse, SshListResponse,
+        SshMkdirResponse, SshMountResponse, SshReadFileResponse, SshSessionSpawnResponse,
+        SshWriteFileResponse,
     },
     ssh::{
         SshConnectionStatus, SshMountBackend, SshMountId, SshMountStatus, SshMountSummary,
@@ -352,6 +353,14 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
             .expect("ssh_exec properties")
             .contains_key("interactive")
     );
+    let exec_properties = exec
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("ssh_exec properties");
+    assert!(exec_properties.contains_key("wait_for_completion_ms"));
+    assert!(exec_properties.contains_key("output_limit"));
+    assert!(exec_properties.contains_key("output_view"));
     assert!(
         !session_spawn
             .input_schema
@@ -832,7 +841,7 @@ async fn ssh_exec_runs_shell_snippets_and_session_spawn_keeps_argv_literal() -> 
             ),
         )
         .await?
-        .into_typed::<SshSessionSpawnResponse>()?;
+        .into_typed::<SshExecResponse>()?;
     assert_eq!(
         exec_spawned.transport,
         pty_mcp::session::SessionTransport::Ssh
@@ -864,6 +873,146 @@ async fn ssh_exec_runs_shell_snippets_and_session_spawn_keeps_argv_literal() -> 
     wait_for_session_exit(&client, &argv_spawned.session_id).await?;
     let argv_output = read_session_output(&client, &argv_spawned.session_id).await?;
     assert!(argv_output.lines.lines().any(|line| line.trim() == "$HOME"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_exec_can_wait_briefly_and_return_completed_result() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("ssh_exec_wait_complete")?;
+    let ssh_path = sandbox.path.join("ssh");
+    write_fake_executable(
+        &ssh_path,
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nsh -lc \"$last\"\n",
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    let app = Arc::new(AppState::new(config));
+    let server = PtyMcpServer::new(app);
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let connected = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_connect").with_arguments(
+                serde_json::json!({
+                    "host_alias": "devbox",
+                    "user": "alice",
+                    "description": "ssh exec wait contract"
+                })
+                .as_object()
+                .expect("connect args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshConnectResponse>()?;
+
+    let exec = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_exec").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "script": "printf 'done\\n'",
+                    "description": "shell script over ssh",
+                    "wait_for_completion_ms": 500,
+                    "output_limit": 20
+                })
+                .as_object()
+                .expect("ssh_exec args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshExecResponse>()?;
+
+    assert_eq!(exec.completed, Some(true));
+    assert_eq!(exec.exit_code, Some(0));
+    assert_eq!(exec.exit_signal, None);
+    assert!(
+        exec.initial_output
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.lines.iter().any(|line| line.text.contains("done")))
+    );
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_exec_wait_timeout_returns_session_without_completion() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("ssh_exec_wait_timeout")?;
+    let ssh_path = sandbox.path.join("ssh");
+    write_fake_executable(
+        &ssh_path,
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nsh -lc \"$last\"\n",
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    let app = Arc::new(AppState::new(config));
+    let server = PtyMcpServer::new(app);
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let connected = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_connect").with_arguments(
+                serde_json::json!({
+                    "host_alias": "devbox",
+                    "user": "alice",
+                    "description": "ssh exec timeout contract"
+                })
+                .as_object()
+                .expect("connect args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshConnectResponse>()?;
+
+    let exec = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_exec").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "script": "printf 'start\\n'; sleep 1; printf 'finish\\n'",
+                    "description": "shell script over ssh",
+                    "wait_for_completion_ms": 50,
+                    "output_limit": 20
+                })
+                .as_object()
+                .expect("ssh_exec args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshExecResponse>()?;
+
+    assert_eq!(exec.completed, Some(false));
+    assert_eq!(exec.exit_code, None);
+    assert_eq!(exec.exit_signal, None);
+
+    let waited = wait_for_session_exit(&client, &exec.session_id).await?;
+    assert!(waited.completed);
+
+    let output = read_session_output(&client, &exec.session_id).await?;
+    assert!(output.lines.contains("start"));
+    assert!(output.lines.contains("finish"));
 
     client.cancel().await?;
     server_handle.await??;

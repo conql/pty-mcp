@@ -136,6 +136,8 @@ flowchart LR
   - optional `output_limit`: cap how much remote PTY output is captured and included in `initial_output`
   - optional `output_view`: choose the format of captured `initial_output` (`plain`, `ansi`, or `raw`), with the same semantics as `pty_read` and initial output capture
 - `ssh_exec`: run a remote script over an existing SSH connection
+  - optional `wait_for_completion_ms`: wait briefly for the script to finish and return completion state, exit code, and `initial_output` inline
+  - if the script does not finish within that window, use `pty_wait` and `pty_read` with the returned `session_id`
 - `ssh_read_file`: read a UTF-8 text file from the remote host
 - `ssh_write_file`: write a UTF-8 text file to the remote host
 - `ssh_list_dir`: list one remote directory level
