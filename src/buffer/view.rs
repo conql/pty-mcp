@@ -1,14 +1,9 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BufferView {
+    #[default]
     Plain,
     Ansi,
     Raw,
-}
-
-impl Default for BufferView {
-    fn default() -> Self {
-        Self::Plain
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

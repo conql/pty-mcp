@@ -20,6 +20,13 @@ Using Cargo:
 cargo install pty-mcp
 ```
 
+Using Homebrew:
+
+```bash
+brew tap observerw/tap
+brew install observerw/tap/pty-mcp
+```
+
 From source:
 
 ```bash
@@ -246,6 +253,22 @@ PTY_MCP_SSH_MANAGED_MOUNT_ROOT = "/tmp/pty-mcp-mounts"
 ```bash
 cargo build
 ```
+
+## Release Automation
+
+GitHub Actions includes:
+
+- `CI`: runs `cargo fmt --check`, `cargo clippy`, and `cargo test`
+- `Release`: on tags like `v0.1.0`, builds release archives for macOS (Intel + Apple Silicon) and Linux (x86_64), publishes a GitHub Release, and updates the Homebrew tap formula
+
+To enable tap updates, add this repository secret:
+
+- `HOMEBREW_TAP_GITHUB_TOKEN`: a token with push access to the tap repository
+
+By default, the release workflow pushes the formula to `${owner}/homebrew-tap` at `Formula/pty-mcp.rb`. You can override either path with repository variables:
+
+- `HOMEBREW_TAP_REPOSITORY`
+- `HOMEBREW_TAP_FORMULA_PATH`
 
 ## License
 

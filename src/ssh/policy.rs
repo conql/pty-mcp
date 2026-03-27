@@ -43,13 +43,12 @@ impl SshPolicy {
                 .map(|path| normalize_path(path.as_path()))
                 .collect();
         }
-        if let Some(root) = managed_mount_root.as_ref() {
-            if !allowed_local_mount_roots
+        if let Some(root) = managed_mount_root.as_ref()
+            && !allowed_local_mount_roots
                 .iter()
                 .any(|candidate| candidate == root)
-            {
-                allowed_local_mount_roots.push(root.clone());
-            }
+        {
+            allowed_local_mount_roots.push(root.clone());
         }
 
         Self {
@@ -188,10 +187,10 @@ impl SshPolicy {
         );
 
         let normalized = normalize_path(path);
-        if let Some(root) = &self.managed_mount_root {
-            if normalized.starts_with(root) {
-                return Ok(());
-            }
+        if let Some(root) = &self.managed_mount_root
+            && normalized.starts_with(root)
+        {
+            return Ok(());
         }
 
         if !self.allow_explicit_mount_paths {

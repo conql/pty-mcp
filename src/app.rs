@@ -1043,8 +1043,7 @@ impl AppState {
                 connection_id,
                 Some(path),
                 output,
-            )
-            .into());
+            ));
         }
 
         let bytes_read = output.stdout.len();

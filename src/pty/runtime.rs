@@ -355,19 +355,19 @@ fn signal_blocking(
 ) -> Result<()> {
     #[cfg(unix)]
     {
-        if let Some(pid) = pid {
-            if signal != SignalKind::Sigkill {
-                let os_signal = match signal {
-                    SignalKind::Sigint => Signal::SIGINT,
-                    SignalKind::Sigterm => Signal::SIGTERM,
-                    SignalKind::Sigkill => Signal::SIGKILL,
-                };
+        if let Some(pid) = pid
+            && signal != SignalKind::Sigkill
+        {
+            let os_signal = match signal {
+                SignalKind::Sigint => Signal::SIGINT,
+                SignalKind::Sigterm => Signal::SIGTERM,
+                SignalKind::Sigkill => Signal::SIGKILL,
+            };
 
-                kill_process(Pid::from_raw(pid as i32), os_signal).map_err(|source| {
-                    anyhow!("failed to send {signal:?} to PTY process {pid}: {source}")
-                })?;
-                return Ok(());
-            }
+            kill_process(Pid::from_raw(pid as i32), os_signal).map_err(|source| {
+                anyhow!("failed to send {signal:?} to PTY process {pid}: {source}")
+            })?;
+            return Ok(());
         }
     }
 

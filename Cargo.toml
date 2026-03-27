@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "network-programming", "development-tool
 [dependencies]
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 chrono = { version = "0.4.44", features = ["serde"] }
+clap = { version = "4.5.39", features = ["derive"] }
 nix = { version = "0.29.0", features = ["process", "signal"] }
 portable-pty = "0.9.0"
 regex = "1.12.3"

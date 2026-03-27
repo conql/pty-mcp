@@ -81,7 +81,7 @@ async fn app_state_kill_without_cleanup_retains_session_and_logs() -> anyhow::Re
         .kill_session(&session.session_id, SignalKind::Sigterm, false)
         .await?;
     assert_eq!(kill.previous_status, SessionStatus::Running);
-    assert_eq!(kill.cleanup, false);
+    assert!(!kill.cleanup);
 
     wait_for_status(
         &app,
@@ -241,10 +241,10 @@ async fn wait_for_status(
 ) -> anyhow::Result<SessionStatus> {
     let started = Instant::now();
     loop {
-        if let Some(summary) = app.registry().get(session_id) {
-            if expected.contains(&summary.status) {
-                return Ok(summary.status);
-            }
+        if let Some(summary) = app.registry().get(session_id)
+            && expected.contains(&summary.status)
+        {
+            return Ok(summary.status);
         }
         if started.elapsed() > timeout {
             anyhow::bail!("timed out waiting for status transition: {:?}", expected);

@@ -6,8 +6,8 @@ use std::path::Path;
 
 use anyhow::{Result, ensure};
 use pty_mcp::mcp::tools::{
-    PtyListResponse, SshConnectResponse, SshDisconnectResponse, SshListResponse,
-    SshMountResponse, SshUnmountResponse,
+    PtyListResponse, SshConnectResponse, SshDisconnectResponse, SshListResponse, SshMountResponse,
+    SshUnmountResponse,
 };
 use pty_mcp::ssh::SshMountStatus;
 use serde_json::json;
@@ -286,23 +286,23 @@ async fn ssh_mount_failure_is_visible_via_ssh_list_and_mount_resource() -> Resul
     ensure!(last_error.contains("failing-mount"));
 
     let mounts_resource = harness.read_resource_json("ssh://mounts").await?;
-    let resource_mount = mounts_resource["mounts"]
-        .as_array()
-        .and_then(|mounts| {
-            mounts
-                .iter()
-                .find(|resource_mount| resource_mount["mount_id"] == json!(mount_id))
-        });
+    let resource_mount = mounts_resource["mounts"].as_array().and_then(|mounts| {
+        mounts
+            .iter()
+            .find(|resource_mount| resource_mount["mount_id"] == json!(mount_id))
+    });
     ensure!(resource_mount.is_some());
 
     let mount_resource = harness
         .read_resource_json(&format!("ssh://mounts/{}", mount_id))
         .await?;
     ensure!(mount_resource["status"] == json!("failed"));
-    ensure!(mount_resource["last_error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("failing-mount"));
+    ensure!(
+        mount_resource["last_error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("failing-mount")
+    );
 
     harness.shutdown().await
 }
@@ -361,7 +361,11 @@ async fn shutdown_automatically_unmounts_managed_mounts() -> Result<()> {
             }),
         )
         .await?;
-    ensure!(Path::new(&mounted.local_path).join(".sshfs-mounted").exists());
+    ensure!(
+        Path::new(&mounted.local_path)
+            .join(".sshfs-mounted")
+            .exists()
+    );
 
     harness.shutdown().await?;
 
