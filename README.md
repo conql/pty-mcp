@@ -9,6 +9,7 @@ With `pty-mcp`, a client can:
 - send follow-up input into the same local or remote shell
 - manage SSH connections, remote sessions, remote files, and remote directories through one MCP surface
 - mount a remote project locally and combine local editing with remote execution
+- expose mount-setup resources so an agent can guide the user through local FUSE/`sshfs` installation when mount support is missing
 
 This makes workflows like dev servers, watch tasks, remote debugging, and near-local remote development much easier to drive.
 
@@ -155,6 +156,8 @@ In practice:
 - Linux: `fuse` or `fuse3`, plus `sshfs`
 
 Without local FUSE support and `sshfs`, SSH connections and remote command execution can still work, but `ssh_mount` will not.
+
+Agents can read the built-in mount setup resources and **walk the user through the correct FUSE/`sshfs` installation steps** for the current platform.
 
 ## MCP Resources
 
