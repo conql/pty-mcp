@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     PtyError, PtyErrorCode,
-    buffer::{BufferReadError, BufferReadPage, BufferReadRequest, BufferStore, BufferView},
+    buffer::{BufferReadPage, BufferReadRequest, BufferStore, BufferView},
     pty::{PtyOutputReceiver, PtySessionHandle},
 };
 
@@ -187,15 +187,14 @@ impl SessionRegistry {
         let entry = sessions
             .get(session_id)
             .ok_or_else(|| session_not_found(session_id))?;
-        entry.buffer.read(request).map_err(|err| match err {
-            BufferReadError::InvalidRegex { pattern, message } => PtyError::new(
+        entry.buffer.read(request).map_err(|err| {
+            PtyError::new(
                 PtyErrorCode::InvalidRegex,
                 "invalid regex pattern for buffer read",
             )
             .with_details(serde_json::json!({
-                "pattern": pattern,
-                "reason": message,
-            })),
+                "reason": format!("{err:#}"),
+            }))
         })
     }
 

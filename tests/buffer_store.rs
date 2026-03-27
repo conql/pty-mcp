@@ -55,7 +55,7 @@ fn regex_filter_and_view_modes_work_together() {
 }
 
 #[test]
-fn invalid_regex_is_reported_as_invalid_regex_error() {
+fn invalid_regex_error_contains_pattern_context() {
     let mut store = BufferStore::new(32);
     store.append_bytes(b"alpha\nbeta\n");
 
@@ -63,7 +63,9 @@ fn invalid_regex_is_reported_as_invalid_regex_error() {
     request.pattern = Some("(".to_string());
 
     let error = store.read(&request).expect_err("invalid regex must fail");
-    assert_eq!(error.error_code(), "INVALID_REGEX");
+    let text = format!("{error:#}");
+    assert!(text.contains("invalid regex pattern for buffer read"));
+    assert!(text.contains("pattern=("));
 }
 
 #[test]

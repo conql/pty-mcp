@@ -1,4 +1,6 @@
-use std::{env, num::ParseIntError, path::PathBuf};
+use std::{env, path::PathBuf};
+
+use anyhow::{Result, bail};
 
 #[derive(Debug, Clone, Default)]
 pub struct SshResolvedBinPaths {
@@ -115,7 +117,7 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn from_env() -> Result<Self, ConfigError> {
+    pub fn from_env() -> Result<Self> {
         let mut config = Self::default();
 
         if let Ok(value) = env::var("PTY_MCP_SESSION_LIMIT") {
@@ -223,10 +225,11 @@ impl Config {
         }
 
         if config.ssh.port_min > config.ssh.port_max {
-            return Err(ConfigError::InvalidPortRange {
-                min: config.ssh.port_min,
-                max: config.ssh.port_max,
-            });
+            bail!(
+                "invalid SSH port range: PTY_MCP_SSH_PORT_MIN={} is greater than PTY_MCP_SSH_PORT_MAX={}",
+                config.ssh.port_min,
+                config.ssh.port_max
+            );
         }
 
         if config.ssh.allowed_mount_roots.is_empty() {
@@ -255,18 +258,16 @@ fn parse_path_list(value: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-fn parse_auth_kinds(key: &'static str, value: &str) -> Result<Vec<String>, ConfigError> {
+fn parse_auth_kinds(key: &'static str, value: &str) -> Result<Vec<String>> {
     let mut parsed = Vec::new();
     for segment in value
         .split(',')
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
     {
-        let normalized =
-            normalize_auth_kind(segment).ok_or_else(|| ConfigError::InvalidAuthKind {
-                key,
-                value: segment.to_string(),
-            })?;
+        let normalized = normalize_auth_kind(segment).ok_or_else(|| {
+            anyhow::anyhow!("invalid ssh auth kind for {key}: value={segment}")
+        })?;
         if !parsed.contains(&normalized) {
             parsed.push(normalized);
         }
@@ -283,34 +284,23 @@ fn normalize_auth_kind(value: &str) -> Option<String> {
     }
 }
 
-fn parse_usize(key: &'static str, value: &str) -> Result<usize, ConfigError> {
+fn parse_usize(key: &'static str, value: &str) -> Result<usize> {
     value
         .parse::<usize>()
-        .map_err(|source| ConfigError::InvalidUsize {
-            key,
-            value: value.to_string(),
-            source,
-        })
+        .map_err(|source| anyhow::anyhow!("invalid usize for {key}: value={value}: {source}"))
 }
 
-fn parse_u16(key: &'static str, value: &str) -> Result<u16, ConfigError> {
+fn parse_u16(key: &'static str, value: &str) -> Result<u16> {
     value
         .parse::<u16>()
-        .map_err(|source| ConfigError::InvalidU16 {
-            key,
-            value: value.to_string(),
-            source,
-        })
+        .map_err(|source| anyhow::anyhow!("invalid u16 for {key}: value={value}: {source}"))
 }
 
-fn parse_bool(key: &'static str, value: &str) -> Result<bool, ConfigError> {
+fn parse_bool(key: &'static str, value: &str) -> Result<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
         "0" | "false" | "no" | "off" => Ok(false),
-        _ => Err(ConfigError::InvalidBool {
-            key,
-            value: value.to_string(),
-        }),
+        _ => bail!("invalid bool for {key}: value={value}"),
     }
 }
 
@@ -395,26 +385,33 @@ fn diskutil_default_paths() -> &'static [&'static str] {
     &[]
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    #[error("invalid usize for {key}: {value}")]
-    InvalidUsize {
-        key: &'static str,
-        value: String,
-        #[source]
-        source: ParseIntError,
-    },
-    #[error("invalid u16 for {key}: {value}")]
-    InvalidU16 {
-        key: &'static str,
-        value: String,
-        #[source]
-        source: ParseIntError,
-    },
-    #[error("invalid SSH port range: min={min}, max={max}")]
-    InvalidPortRange { min: u16, max: u16 },
-    #[error("invalid bool for {key}: {value}")]
-    InvalidBool { key: &'static str, value: String },
-    #[error("invalid ssh auth kind for {key}: {value}")]
-    InvalidAuthKind { key: &'static str, value: String },
+#[cfg(test)]
+mod tests {
+    use super::{parse_auth_kinds, parse_bool, parse_usize};
+
+    #[test]
+    fn parse_usize_error_contains_key_and_value() {
+        let error = parse_usize("PTY_MCP_SESSION_LIMIT", "abc").expect_err("parse should fail");
+        let text = format!("{error:#}");
+        assert!(text.contains("PTY_MCP_SESSION_LIMIT"));
+        assert!(text.contains("abc"));
+    }
+
+    #[test]
+    fn parse_bool_error_contains_key_and_value() {
+        let error =
+            parse_bool("PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS", "maybe").expect_err("parse should fail");
+        let text = format!("{error:#}");
+        assert!(text.contains("PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS"));
+        assert!(text.contains("maybe"));
+    }
+
+    #[test]
+    fn parse_auth_kind_error_contains_key_and_value() {
+        let error = parse_auth_kinds("PTY_MCP_SSH_ALLOWED_AUTH_KINDS", "magic")
+            .expect_err("parse should fail");
+        let text = format!("{error:#}");
+        assert!(text.contains("PTY_MCP_SSH_ALLOWED_AUTH_KINDS"));
+        assert!(text.contains("magic"));
+    }
 }

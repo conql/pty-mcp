@@ -1,21 +1,9 @@
 use std::collections::VecDeque;
 
+use anyhow::{Context, Result};
 use regex::RegexBuilder;
 
 use super::view::{BufferLine, BufferReadPage, BufferReadRequest, BufferView};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BufferReadError {
-    InvalidRegex { pattern: String, message: String },
-}
-
-impl BufferReadError {
-    pub fn error_code(&self) -> &'static str {
-        match self {
-            Self::InvalidRegex { .. } => "INVALID_REGEX",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BufferStoreStats {
@@ -75,7 +63,7 @@ impl BufferStore {
         self.enforce_retention();
     }
 
-    pub fn read(&self, request: &BufferReadRequest) -> Result<BufferReadPage, BufferReadError> {
+    pub fn read(&self, request: &BufferReadRequest) -> Result<BufferReadPage> {
         let filtered = self.filter_lines(request)?;
         let start = request.offset.min(filtered.len());
         let limit = request.limit;
@@ -177,7 +165,7 @@ impl BufferStore {
     fn filter_lines<'a>(
         &'a self,
         request: &BufferReadRequest,
-    ) -> Result<Vec<ReadLineRef<'a>>, BufferReadError> {
+    ) -> Result<Vec<ReadLineRef<'a>>> {
         let mut lines = self
             .lines
             .iter()
@@ -195,10 +183,7 @@ impl BufferStore {
         let regex = RegexBuilder::new(pattern)
             .case_insensitive(request.ignore_case)
             .build()
-            .map_err(|error| BufferReadError::InvalidRegex {
-                pattern: pattern.to_string(),
-                message: error.to_string(),
-            })?;
+            .with_context(|| format!("invalid regex pattern for buffer read: pattern={pattern}"))?;
 
         Ok(lines
             .into_iter()
