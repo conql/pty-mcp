@@ -28,6 +28,13 @@ fn test_app() -> AppState {
     AppState::new(Config::default())
 }
 
+fn mount_feature_unavailable_config() -> Config {
+    let mut config = Config::default();
+    config.ssh.sshfs_bin_path = Some(PathBuf::from("/definitely/missing/sshfs"));
+    config.ssh.umount_bin_path = Some(PathBuf::from("/definitely/missing/umount"));
+    config
+}
+
 fn default_target() -> SshTarget {
     SshTarget {
         host_alias: Some("devbox".to_string()),
@@ -236,6 +243,23 @@ impl Drop for TempDirGuard {
 }
 
 #[cfg(unix)]
+fn mount_feature_available_config(sandbox: &TempDirGuard) -> anyhow::Result<Config> {
+    let ssh_path = sandbox.path.join("ssh");
+    let sshfs_path = sandbox.path.join("sshfs");
+    let umount_path = sandbox.path.join("umount");
+
+    write_fake_executable(&ssh_path, "#!/bin/sh\necho 'OpenSSH_9.9p1' >&2\n")?;
+    write_fake_executable(&sshfs_path, "#!/bin/sh\necho 'SSHFS 3.7.3'\n")?;
+    write_fake_executable(&umount_path, "#!/bin/sh\necho 'umount util-linux 2.39'\n")?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    config.ssh.sshfs_bin_path = Some(sshfs_path);
+    config.ssh.umount_bin_path = Some(umount_path);
+    Ok(config)
+}
+
+#[cfg(unix)]
 fn write_fake_executable(path: &Path, body: &str) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -246,9 +270,13 @@ fn write_fake_executable(path: &Path, body: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
-fn ssh_tools_are_registered_and_task_optional() {
-    let server = PtyMcpServer::new(Arc::new(AppState::new(Config::default())));
+fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("mount_tool_registration")?;
+    let server = PtyMcpServer::new(Arc::new(AppState::new(mount_feature_available_config(
+        &sandbox,
+    )?)));
     let tool_defs = server.tool_definitions();
     let connect = tool_defs
         .iter()
@@ -345,6 +373,22 @@ fn ssh_tools_are_registered_and_task_optional() {
         .expect("ssh_read_file should expose required fields");
     assert!(read_required.contains(&serde_json::json!("connection_id")));
     assert!(read_required.contains(&serde_json::json!("path")));
+
+    Ok(())
+}
+
+#[test]
+fn ssh_mount_tools_are_hidden_when_mount_feature_is_unavailable() {
+    let server = PtyMcpServer::new(Arc::new(AppState::new(mount_feature_unavailable_config())));
+    let tool_names = server
+        .tool_definitions()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(tool_names.iter().any(|name| name == "ssh_connect"));
+    assert!(tool_names.iter().all(|name| name != "ssh_mount"));
+    assert!(tool_names.iter().all(|name| name != "ssh_unmount"));
 }
 
 #[cfg(unix)]
@@ -412,7 +456,8 @@ async fn ssh_connect_and_ssh_list_support_reuse_flow() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result<()> {
-    let app = Arc::new(test_app());
+    let sandbox = TempDirGuard::new("mount_resources_visible")?;
+    let app = Arc::new(AppState::new(mount_feature_available_config(&sandbox)?));
     let mut connection = app.ssh_create_placeholder_connection(default_target());
     connection.status = SshConnectionStatus::Ready;
     app.ssh_upsert_connection(connection.clone());
@@ -490,6 +535,52 @@ async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result
 }
 
 #[tokio::test]
+async fn ssh_mount_resources_are_hidden_when_mount_feature_is_unavailable() -> anyhow::Result<()> {
+    let app = Arc::new(AppState::new(mount_feature_unavailable_config()));
+    let connection = app.ssh_create_placeholder_connection(default_target());
+    app.ssh_upsert_mount(mounted_summary(connection.connection_id.clone(), "hidden"));
+
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server = PtyMcpServer::new(app);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let resources = client.list_resources(None).await?;
+    let resource_uris = resources
+        .resources
+        .iter()
+        .map(|resource| resource.raw.uri.as_ref())
+        .collect::<Vec<_>>();
+    assert!(!resource_uris.contains(&"ssh://mounts"));
+    assert!(
+        !resource_uris
+            .iter()
+            .any(|uri| uri.starts_with("ssh://mounts/"))
+    );
+
+    let templates = client.list_resource_templates(None).await?;
+    let template_uris = templates
+        .resource_templates
+        .iter()
+        .map(|template| template.raw.uri_template.as_ref())
+        .collect::<Vec<_>>();
+    assert!(!template_uris.contains(&"ssh://mounts/{id}"));
+
+    let read_error = client
+        .read_resource(ReadResourceRequestParams::new("ssh://mounts"))
+        .await
+        .expect_err("ssh://mounts should not be readable when mount feature is hidden");
+    assert!(read_error.to_string().contains("resource not found"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn ssh_connect_reports_capability_unavailable_when_ssh_missing() -> anyhow::Result<()> {
     let mut config = Config::default();
     config.ssh.ssh_bin_path = Some(PathBuf::from("/definitely/missing/ssh"));
@@ -530,9 +621,11 @@ async fn ssh_connect_reports_capability_unavailable_when_ssh_missing() -> anyhow
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn ssh_mount_requires_local_path_in_tool_contract() -> anyhow::Result<()> {
-    let app = Arc::new(test_app());
+    let sandbox = TempDirGuard::new("mount_requires_local_path")?;
+    let app = Arc::new(AppState::new(mount_feature_available_config(&sandbox)?));
     let mut connection = app.ssh_create_placeholder_connection(default_target());
     connection.status = SshConnectionStatus::Ready;
     app.ssh_upsert_connection(connection.clone());

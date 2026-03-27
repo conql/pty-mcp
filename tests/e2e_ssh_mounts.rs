@@ -6,8 +6,8 @@ use std::path::Path;
 
 use anyhow::{Result, ensure};
 use pty_mcp::mcp::tools::{
-    PtyListResponse, SshConnectResponse, SshDisconnectResponse, SshListResponse,
-    SshMountResponse, SshUnmountResponse,
+    PtyListResponse, SshConnectResponse, SshDisconnectResponse, SshListResponse, SshMountResponse,
+    SshUnmountResponse,
 };
 use pty_mcp::ssh::SshMountStatus;
 use serde_json::json;
@@ -36,8 +36,8 @@ async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()>
             "ssh_session_spawn",
             json!({
                 "connection_id": connected.connection_id,
-                "command": "printf",
-                "args": ["hold-open"],
+                "command": "sh",
+                "args": ["-c", "printf 'hold-open\\n'; sleep 5"],
                 "interactive": true,
                 "description": "session retained for disconnect cleanup"
             }),
@@ -181,7 +181,7 @@ async fn ssh_unmount_cleans_managed_mounts_but_keeps_explicit_paths() -> Result<
 }
 
 #[tokio::test]
-async fn ssh_mount_fails_when_sshfs_capability_is_missing_through_real_binary() -> Result<()> {
+async fn ssh_mount_tools_and_resources_are_hidden_when_sshfs_capability_is_missing() -> Result<()> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock before unix epoch")
@@ -199,32 +199,15 @@ async fn ssh_mount_fails_when_sshfs_capability_is_missing_through_real_binary() 
         .start()
         .await?;
 
-    let connected = harness
-        .call_tool_typed::<SshConnectResponse>(
-            "ssh_connect",
-            json!({
-                "host_alias": "devbox",
-                "user": "alice",
-                "description": "missing sshfs capability e2e"
-            }),
-        )
-        .await?;
+    let tool_names = harness.list_tool_names().await?;
+    ensure!(!tool_names.iter().any(|name| name == "ssh_mount"));
+    ensure!(!tool_names.iter().any(|name| name == "ssh_unmount"));
 
-    let error = harness
-        .call_tool_error(
-            "ssh_mount",
-            json!({
-                "connection_id": connected.connection_id,
-                "remote_path": "/srv/project",
-                "local_path": harness.managed_mount_root().join("missing-sshfs"),
-                "create_local_path": true,
-                "description": "missing sshfs mount e2e"
-            }),
-        )
-        .await?;
-    let message = error.to_string();
-    ensure!(message.contains("capability"));
-    ensure!(message.contains("sshfs"));
+    let resource_uris = harness.list_resource_uris().await?;
+    ensure!(!resource_uris.iter().any(|uri| uri == "ssh://mounts"));
+
+    let template_uris = harness.list_resource_template_uris().await?;
+    ensure!(!template_uris.iter().any(|uri| uri == "ssh://mounts/{id}"));
 
     harness.shutdown().await
 }
@@ -286,23 +269,23 @@ async fn ssh_mount_failure_is_visible_via_ssh_list_and_mount_resource() -> Resul
     ensure!(last_error.contains("failing-mount"));
 
     let mounts_resource = harness.read_resource_json("ssh://mounts").await?;
-    let resource_mount = mounts_resource["mounts"]
-        .as_array()
-        .and_then(|mounts| {
-            mounts
-                .iter()
-                .find(|resource_mount| resource_mount["mount_id"] == json!(mount_id))
-        });
+    let resource_mount = mounts_resource["mounts"].as_array().and_then(|mounts| {
+        mounts
+            .iter()
+            .find(|resource_mount| resource_mount["mount_id"] == json!(mount_id))
+    });
     ensure!(resource_mount.is_some());
 
     let mount_resource = harness
         .read_resource_json(&format!("ssh://mounts/{}", mount_id))
         .await?;
     ensure!(mount_resource["status"] == json!("failed"));
-    ensure!(mount_resource["last_error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("failing-mount"));
+    ensure!(
+        mount_resource["last_error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("failing-mount")
+    );
 
     harness.shutdown().await
 }
@@ -361,7 +344,11 @@ async fn shutdown_automatically_unmounts_managed_mounts() -> Result<()> {
             }),
         )
         .await?;
-    ensure!(Path::new(&mounted.local_path).join(".sshfs-mounted").exists());
+    ensure!(
+        Path::new(&mounted.local_path)
+            .join(".sshfs-mounted")
+            .exists()
+    );
 
     harness.shutdown().await?;
 

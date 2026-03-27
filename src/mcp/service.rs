@@ -26,9 +26,15 @@ pub struct PtyMcpServer {
 
 impl PtyMcpServer {
     pub fn new(app: Arc<AppState>) -> Self {
+        let mut tool_router = Self::tool_router();
+        if !app.ssh_mount_feature_available() {
+            tool_router.remove_route("ssh_mount");
+            tool_router.remove_route("ssh_unmount");
+        }
+
         Self {
             app,
-            tool_router: Self::tool_router(),
+            tool_router,
             processor: tasks::new_task_processor(),
         }
     }
@@ -52,14 +58,27 @@ impl ServerHandler for PtyMcpServer {
             .build();
         capabilities.tasks = Some(TasksCapability::server_default());
 
+        let ssh_mount_tools = if self.app().ssh_mount_feature_available() {
+            ", ssh_mount, ssh_unmount,"
+        } else {
+            ","
+        };
+        let ssh_mount_resources = if self.app().ssh_mount_feature_available() {
+            " and ssh://mounts"
+        } else {
+            ""
+        };
+
         ServerInfo::new(capabilities).with_instructions(
-            "Manage PTY sessions through tools. Use pty_spawn, pty_write, pty_read, pty_list, \
-                 pty_kill, and pty_wait for the main PTY workflow. Use ssh_connect, \
+            &format!(
+                "Manage PTY sessions through tools. Use pty_spawn, pty_write, pty_read, \
+                 pty_list, pty_kill, and pty_wait for the main PTY workflow. Use ssh_connect, \
                  ssh_session_spawn, ssh_exec, ssh_read_file, ssh_write_file, ssh_list_dir, \
-                 ssh_mkdir, ssh_mount, ssh_unmount, ssh_list, and ssh_disconnect to manage SSH \
+                 ssh_mkdir{ssh_mount_tools} ssh_list, and ssh_disconnect to manage SSH \
                  connections, remote sessions, remote files, and mount summaries. Resources \
-                 expose read-only snapshots, including pty://sessions plus ssh://connections and \
-                 ssh://mounts, and tasks are available as an optional enhancement.",
+                 expose read-only snapshots, including pty://sessions plus ssh://connections{ssh_mount_resources}, \
+                 and tasks are available as an optional enhancement."
+            ),
         )
     }
 
@@ -76,7 +95,7 @@ impl ServerHandler for PtyMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
-        std::future::ready(Ok(resources::list_resource_templates()))
+        std::future::ready(Ok(resources::list_resource_templates(self.app())))
     }
 
     fn read_resource(

@@ -30,6 +30,7 @@ fn internal_resource_error(error: impl std::fmt::Display) -> ErrorData {
 }
 
 pub fn list_resources(app: &AppState) -> ListResourcesResult {
+    let mount_feature_available = app.ssh_mount_feature_available();
     let mut resources = vec![
         RawResource::new(SESSIONS_URI, "sessions")
             .with_title("PTY Sessions")
@@ -41,12 +42,17 @@ pub fn list_resources(app: &AppState) -> ListResourcesResult {
             .with_description("Structured summary of all known SSH connections.")
             .with_mime_type("application/json")
             .no_annotation(),
-        RawResource::new(SSH_MOUNTS_URI, "ssh-mounts")
-            .with_title("SSH Mounts")
-            .with_description("Structured summary of all known SSH mounts.")
-            .with_mime_type("application/json")
-            .no_annotation(),
     ];
+
+    if mount_feature_available {
+        resources.push(
+            RawResource::new(SSH_MOUNTS_URI, "ssh-mounts")
+                .with_title("SSH Mounts")
+                .with_description("Structured summary of all known SSH mounts.")
+                .with_mime_type("application/json")
+                .no_annotation(),
+        );
+    }
 
     for session in app.registry().list() {
         let id = session.session_id.as_str();
@@ -93,22 +99,24 @@ pub fn list_resources(app: &AppState) -> ListResourcesResult {
         );
     }
 
-    for mount in app.ssh_list_mounts() {
-        let id = mount.mount_id.as_str();
-        resources.push(
-            RawResource::new(format!("{SSH_MOUNTS_URI}/{id}"), format!("ssh-mount-{id}"))
-                .with_title(format!("SSH Mount {id}"))
-                .with_description("Structured SSH mount snapshot.")
-                .with_mime_type("application/json")
-                .no_annotation(),
-        );
+    if mount_feature_available {
+        for mount in app.ssh_list_mounts() {
+            let id = mount.mount_id.as_str();
+            resources.push(
+                RawResource::new(format!("{SSH_MOUNTS_URI}/{id}"), format!("ssh-mount-{id}"))
+                    .with_title(format!("SSH Mount {id}"))
+                    .with_description("Structured SSH mount snapshot.")
+                    .with_mime_type("application/json")
+                    .no_annotation(),
+            );
+        }
     }
 
     ListResourcesResult::with_all_items(resources)
 }
 
-pub fn list_resource_templates() -> ListResourceTemplatesResult {
-    ListResourceTemplatesResult::with_all_items(vec![
+pub fn list_resource_templates(app: &AppState) -> ListResourceTemplatesResult {
+    let mut templates = vec![
         RawResourceTemplate::new("pty://sessions/{id}", "session")
             .with_title("PTY Session Snapshot")
             .with_description("Snapshot for a single PTY session.")
@@ -129,12 +137,19 @@ pub fn list_resource_templates() -> ListResourceTemplatesResult {
             .with_description("Snapshot for a single SSH connection.")
             .with_mime_type("application/json")
             .no_annotation(),
-        RawResourceTemplate::new("ssh://mounts/{id}", "ssh-mount")
-            .with_title("SSH Mount Snapshot")
-            .with_description("Snapshot for a single SSH mount.")
-            .with_mime_type("application/json")
-            .no_annotation(),
-    ])
+    ];
+
+    if app.ssh_mount_feature_available() {
+        templates.push(
+            RawResourceTemplate::new("ssh://mounts/{id}", "ssh-mount")
+                .with_title("SSH Mount Snapshot")
+                .with_description("Snapshot for a single SSH mount.")
+                .with_mime_type("application/json")
+                .no_annotation(),
+        );
+    }
+
+    ListResourceTemplatesResult::with_all_items(templates)
 }
 
 pub fn read_resource(app: &AppState, uri: &str) -> Result<ReadResourceResult, ErrorData> {
@@ -143,10 +158,14 @@ pub fn read_resource(app: &AppState, uri: &str) -> Result<ReadResourceResult, Er
         SSH_CONNECTIONS_URI => {
             json_contents(uri, json!({ "connections": app.ssh_list_connections() }))
         }
-        SSH_MOUNTS_URI => json_contents(uri, json!({ "mounts": app.ssh_list_mounts() })),
+        SSH_MOUNTS_URI if app.ssh_mount_feature_available() => {
+            json_contents(uri, json!({ "mounts": app.ssh_list_mounts() }))
+        }
         _ if uri.starts_with("pty://sessions/") => read_session_resource(app, uri)?,
         _ if uri.starts_with("ssh://connections/") => read_ssh_connection_resource(app, uri)?,
-        _ if uri.starts_with("ssh://mounts/") => read_ssh_mount_resource(app, uri)?,
+        _ if uri.starts_with("ssh://mounts/") && app.ssh_mount_feature_available() => {
+            read_ssh_mount_resource(app, uri)?
+        }
         _ => return Err(resource_not_found()),
     };
 

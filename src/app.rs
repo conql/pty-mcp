@@ -261,6 +261,10 @@ impl AppState {
         &self.ssh_capabilities
     }
 
+    pub fn ssh_mount_feature_available(&self) -> bool {
+        self.ssh_capabilities.sshfs.available && self.ssh_capabilities.unmount.available
+    }
+
     pub fn ssh_create_placeholder_connection(&self, target: SshTarget) -> SshConnectionSummary {
         self.ssh_registry
             .create_placeholder_connection(target, self.ssh_capabilities.clone())
@@ -356,12 +360,11 @@ impl AppState {
             .await
             .map_err(map_ssh_runtime_error)?;
 
-        let status =
-            if self.ssh_capabilities.sshfs.available && self.ssh_capabilities.unmount.available {
-                SshConnectionStatus::Ready
-            } else {
-                SshConnectionStatus::Degraded
-            };
+        let status = if self.ssh_mount_feature_available() {
+            SshConnectionStatus::Ready
+        } else {
+            SshConnectionStatus::Degraded
+        };
 
         let summary = SshConnectionSummary {
             connection_id: SshConnectionId::new(),
@@ -530,9 +533,9 @@ impl AppState {
             );
         }
 
-        if !self.ssh_capabilities.sshfs.available {
+        if !self.ssh_mount_feature_available() {
             bail!(
-                "sshfs capability is unavailable on this host: capabilities={:?}",
+                "ssh mount capability is unavailable on this host: capabilities={:?}",
                 self.ssh_capabilities
             );
         }
