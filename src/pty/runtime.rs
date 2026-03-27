@@ -10,6 +10,7 @@ use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 #[cfg(unix)]
 use nix::{
+    errno::Errno,
     sys::signal::{Signal, kill as kill_process},
     unistd::Pid,
 };
@@ -364,10 +365,14 @@ fn signal_blocking(
                 SignalKind::Sigkill => Signal::SIGKILL,
             };
 
-            kill_process(Pid::from_raw(pid as i32), os_signal).map_err(|source| {
-                anyhow!("failed to send {signal:?} to PTY process {pid}: {source}")
-            })?;
-            return Ok(());
+            match kill_process(Pid::from_raw(pid as i32), os_signal) {
+                Ok(()) | Err(Errno::ESRCH) => return Ok(()),
+                Err(source) => {
+                    return Err(anyhow!(
+                        "failed to send {signal:?} to PTY process {pid}: {source}"
+                    ));
+                }
+            }
         }
     }
 

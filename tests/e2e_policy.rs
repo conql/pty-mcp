@@ -43,30 +43,20 @@ async fn spawn_policy_from_env_is_enforced_through_real_binary() -> Result<()> {
             )
             .await?;
 
-        let initial_output = spawned.initial_output.as_ref().map(|snapshot| {
-            snapshot
-                .lines
-                .iter()
-                .map(|line| line.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        });
-        ensure!(
-            initial_output
-                .as_deref()
-                .unwrap_or_default()
-                .contains("mode=enabled"),
-            "spawn output missing allowlisted env value: {:?}",
-            initial_output
-        );
-        ensure!(
-            initial_output
-                .as_deref()
-                .unwrap_or_default()
-                .contains(&format!("cwd={}", canonical_workspace.display())),
-            "spawn output missing resolved cwd: {:?}",
-            initial_output
-        );
+        ensure_spawn_output_contains(
+            &harness,
+            &spawned,
+            "mode=enabled",
+            "spawn output missing allowlisted env value",
+        )
+        .await?;
+        ensure_spawn_output_contains(
+            &harness,
+            &spawned,
+            &format!("cwd={}", canonical_workspace.display()),
+            "spawn output missing resolved cwd",
+        )
+        .await?;
 
         let blocked_command = harness
             .call_tool_error(
@@ -231,22 +221,13 @@ async fn denied_env_vars_from_env_are_enforced_through_real_binary() -> Result<(
         )
         .await?;
 
-    let initial_output = allowed.initial_output.as_ref().map(|snapshot| {
-        snapshot
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    });
-    ensure!(
-        initial_output
-            .as_deref()
-            .unwrap_or_default()
-            .contains("mode=enabled"),
-        "spawn output missing allowlisted env value under deny policy: {:?}",
-        initial_output
-    );
+    ensure_spawn_output_contains(
+        &harness,
+        &allowed,
+        "mode=enabled",
+        "spawn output missing allowlisted env value under deny policy",
+    )
+    .await?;
 
     let blocked = harness
         .call_tool_error(
@@ -375,4 +356,49 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         std::process::id(),
         nanos
     ))
+}
+
+async fn ensure_spawn_output_contains(
+    harness: &E2eHarness,
+    spawned: &PtySpawnResponse,
+    needle: &str,
+    error_context: &str,
+) -> Result<()> {
+    let initial_output = spawned.initial_output.as_ref().map(|snapshot| {
+        snapshot
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    if initial_output
+        .as_deref()
+        .unwrap_or_default()
+        .contains(needle)
+    {
+        return Ok(());
+    }
+
+    let session_id = spawned.session_id.clone();
+    harness
+        .wait_until(error_context, || {
+            let session_id = session_id.clone();
+            async move {
+                let read = harness
+                    .call_tool_typed::<PtyReadResponse>(
+                        "pty_read",
+                        json!({
+                            "session_id": session_id,
+                            "limit": 20
+                        }),
+                    )
+                    .await?;
+                Ok(read.lines.contains(needle))
+            }
+        })
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("{error_context}: {error:#}; initial_output={initial_output:?}")
+        })
 }

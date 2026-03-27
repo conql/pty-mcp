@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, RwLock},
+    time::Duration,
 };
 
 use anyhow::{Result, anyhow, bail};
@@ -9,6 +10,7 @@ use crate::{
     buffer::{BufferReadPage, BufferReadRequest, BufferStore, BufferView},
     pty::{PtyOutputReceiver, PtySessionHandle},
 };
+use tokio::sync::watch;
 
 use super::{BufferStats, ExitInfo, SessionId, SessionStatus, SessionSummary, SignalKind};
 
@@ -29,6 +31,7 @@ struct SessionEntry {
     summary: SessionSummary,
     buffer: BufferStore,
     runtime: Option<PtySessionHandle>,
+    output_drained: Option<watch::Receiver<bool>>,
     termination_requested: bool,
 }
 
@@ -95,10 +98,12 @@ impl SessionRegistry {
         handle: PtySessionHandle,
         mut output: PtyOutputReceiver,
     ) -> Result<()> {
+        let (output_done_tx, output_done_rx) = watch::channel(false);
         self.with_session_mut(session_id, |entry| {
             entry.summary.status = SessionStatus::Running;
             entry.summary.pid = pid;
             entry.runtime = Some(handle.clone());
+            entry.output_drained = Some(output_done_rx);
         })?;
 
         let output_registry = self.clone();
@@ -107,6 +112,7 @@ impl SessionRegistry {
             while let Some(chunk) = output.recv().await {
                 let _ = output_registry.append_output(&output_session, &chunk);
             }
+            let _ = output_done_tx.send(true);
         });
 
         let exit_registry = self.clone();
@@ -147,6 +153,7 @@ impl SessionRegistry {
                     summary: session,
                     buffer: BufferStore::new(self.inner.max_buffer_lines),
                     runtime: None,
+                    output_drained: None,
                     termination_requested: false,
                 },
             );
@@ -327,6 +334,8 @@ impl SessionRegistry {
         let runtime = runtime.ok_or_else(|| session_not_running(session_id))?;
         if let Some(exit) = runtime.wait(timeout).await? {
             let _ = self.mark_exited(session_id, exit.exit_info);
+            self.wait_for_output_drain(session_id, Duration::from_millis(100))
+                .await;
         }
 
         let sessions = self
@@ -418,6 +427,36 @@ impl SessionRegistry {
             .ok_or_else(|| session_not_found(session_id))?;
         mutator(entry);
         Ok(())
+    }
+
+    async fn wait_for_output_drain(&self, session_id: &SessionId, timeout: Duration) {
+        let Some(mut output_drained) = self
+            .inner
+            .sessions
+            .read()
+            .expect("session registry poisoned")
+            .get(session_id)
+            .and_then(|entry| entry.output_drained.clone())
+        else {
+            return;
+        };
+
+        if *output_drained.borrow() {
+            return;
+        }
+
+        let _ = tokio::time::timeout(timeout, async move {
+            loop {
+                if *output_drained.borrow() {
+                    break;
+                }
+
+                if output_drained.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await;
     }
 
     async fn write_with_mode(
