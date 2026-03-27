@@ -263,6 +263,10 @@ PTY_MCP_SSH_MANAGED_MOUNT_ROOT = "/tmp/pty-mcp-mounts"
 cargo build
 ```
 
+## Acknowledgements
+
+Thanks to [shekohex/opencode-pty](https://github.com/shekohex/opencode-pty) for sharing a thoughtful open-source PTY management implementation and for providing useful prior art while shaping `pty-mcp`.
+
 ## License
 
 MIT
