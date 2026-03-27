@@ -8,7 +8,7 @@ use anyhow::{Context, Result, ensure};
 use pty_mcp::{
     mcp::tools::{
         PtyKillResponse, PtyListResponse, PtyReadResponse, PtySpawnResponse, PtyWaitResponse,
-        SshConnectResponse, SshSessionSpawnResponse,
+        SshConnectResponse, SshExecResponse,
     },
     session::{SessionStatus, SessionSummary, SessionTransport},
 };
@@ -159,7 +159,7 @@ async fn resources_and_pty_list_stay_consistent_across_exit_and_retained_states(
         .await?;
 
     let ssh_exited = harness
-        .call_tool_typed::<SshSessionSpawnResponse>(
+        .call_tool_typed::<SshExecResponse>(
             "ssh_exec",
             json!({
                 "connection_id": connected.connection_id,

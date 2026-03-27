@@ -697,6 +697,9 @@ impl PtyMcpServer {
         Parameters(request): Parameters<SshExecRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let wait_for_completion_ms = request.wait_for_completion_ms;
+        let should_capture_initial_output = wait_for_completion_ms.is_some()
+            || request.output_limit.is_some()
+            || request.output_view.is_some();
         let output_limit = request
             .output_limit
             .unwrap_or(self.app().config().default_read_limit)
@@ -742,26 +745,24 @@ impl PtyMcpServer {
                     .get(&spawned.session_id)
                     .unwrap_or(spawned);
 
-                let initial_output = if wait_outcome.is_some() {
-                    match self.app().read_session(
+                let initial_output = if should_capture_initial_output {
+                    match capture_initial_output(
+                        self.app(),
                         &latest.session_id,
-                        &BufferReadRequest {
-                            offset: 0,
-                            limit: output_limit,
-                            pattern: None,
-                            ignore_case: false,
-                            view: output_view,
-                        },
-                    ) {
-                        Ok(page) => Some(output_snapshot_from_page(page)),
+                        wait_for_completion_ms.unwrap_or(0),
+                        output_limit,
+                        output_view,
+                    )
+                    .await
+                    {
+                        Ok(snapshot) => snapshot,
                         Err(error) => {
                             return Ok::<CallToolResult, ErrorData>(tool_execution_error(error));
                         }
                     }
                 } else {
                     None
-                }
-                .filter(|snapshot| snapshot.returned > 0);
+                };
 
                 structured(&SshExecResponse {
                     connection_id: request.connection_id,
