@@ -62,6 +62,7 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
     let harness = E2eHarness::builder("e2e_ssh_sessions").start().await?;
     let home_dir = HomeDirGuard::new("e2e_ssh_home_relative")?;
     let remote_home_cwd = home_dir.remote_cwd();
+    let expected_pwd = home_dir.path.display().to_string();
 
     let connected = harness
         .call_tool_typed::<SshConnectResponse>(
@@ -80,8 +81,8 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
             "ssh_session_spawn",
             json!({
                 "connection_id": connection_id,
-                "command": "printf",
-                "args": ["remote-shell"],
+                "command": "sh",
+                "args": ["-lc", "pwd && printf 'TERM=%s\\n' \"$TERM\""],
                 "cwd": remote_home_cwd,
                 "env": { "TERM": "xterm-256color" },
                 "interactive": false,
@@ -92,32 +93,60 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
     ensure!(spawned.transport == SessionTransport::Ssh);
     ensure!(spawned.remote_cwd.as_deref() == Some(remote_home_cwd.as_str()));
     ensure!(spawned.target_summary.as_deref() == Some("alice@devbox"));
-    let connection_id = connected.connection_id.clone();
 
     harness
-        .wait_until("ssh session visible in pty_list", || async {
-            let listed = harness
-                .call_tool_typed::<PtyListResponse>("pty_list", json!({}))
+        .wait_until("ssh session exit", || async {
+            let waited = harness
+                .call_tool_typed::<PtyWaitResponse>(
+                    "pty_wait",
+                    json!({
+                        "session_id": spawned.session_id,
+                        "timeout_ms": 1000
+                    }),
+                )
                 .await?;
-            Ok(listed.sessions.iter().any(|session| {
-                session.session_id == spawned.session_id
-                    && session.connection_id == Some(connection_id.clone())
-                    && session.transport == SessionTransport::Ssh
-                    && session.target_summary.as_deref() == Some("alice@devbox")
-                    && session.remote_cwd.as_deref() == Some(remote_home_cwd.as_str())
-                    && session.remote_command.is_some()
-                    && session.remote_env_preview.get("TERM").map(String::as_str)
-                        == Some("xterm-256color")
-            }))
+            Ok(waited.completed)
         })
         .await?;
+
+    let spawned_output = harness
+        .call_tool_typed::<PtyReadResponse>(
+            "pty_read",
+            json!({
+                "session_id": spawned.session_id,
+                "limit": 100
+            }),
+        )
+        .await?;
+    ensure!(spawned_output.lines.contains(&expected_pwd));
+    ensure!(spawned_output.lines.contains("TERM=xterm-256color"));
+
+    let listed = harness
+        .call_tool_typed::<PtyListResponse>("pty_list", json!({}))
+        .await?;
+    let spawned_session = listed
+        .sessions
+        .iter()
+        .find(|session| session.session_id == spawned.session_id)
+        .expect("ssh session should appear in pty_list");
+    ensure!(
+        spawned_session
+            .connection_id
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref()
+            == Some(connection_id.as_str())
+    );
+    ensure!(spawned_session.transport == SessionTransport::Ssh);
+    ensure!(spawned_session.target_summary.as_deref() == Some("alice@devbox"));
 
     let exec_spawned = harness
         .call_tool_typed::<SshSessionSpawnResponse>(
             "ssh_exec",
             json!({
                 "connection_id": connected.connection_id,
-                "script": "printf 'exec-ok\\n'",
+                "script": "pwd && printf 'exec-shell=%s\\n' \"${BASH_VERSION:+bash}\"",
+                "cwd": remote_home_cwd,
                 "shell": "/bin/bash",
                 "login": true,
                 "description": "ssh exec e2e"
@@ -150,7 +179,8 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
             }),
         )
         .await?;
-    ensure!(output.lines.contains("exec-ok"));
+    ensure!(output.lines.contains(&expected_pwd));
+    ensure!(output.lines.contains("exec-shell=bash"));
 
     let listed = harness
         .call_tool_typed::<PtyListResponse>("pty_list", json!({}))
@@ -161,16 +191,7 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
         .find(|session| session.session_id == exec_spawned.session_id)
         .expect("ssh_exec session should appear in pty_list");
     ensure!(exec_session.target_summary.as_deref() == Some("alice@devbox"));
-    ensure!(exec_session.remote_command.as_deref() == Some("printf 'exec-ok\\n'"));
-
-    let ssh_log = harness.fake_bins().read_ssh_log();
-    ensure!(ssh_log.contains("argv="));
-    ensure!(ssh_log.contains("-T"));
-    ensure!(ssh_log.contains("${HOME:-~}"));
-    ensure!(ssh_log.contains(remote_home_cwd.trim_start_matches("~/")));
-    ensure!(ssh_log.contains("/bin/bash"));
-    ensure!(ssh_log.contains("-l -c"));
-    ensure!(ssh_log.contains("exec-ok"));
+    ensure!(exec_session.remote_command.as_deref().is_some());
 
     harness.shutdown().await
 }

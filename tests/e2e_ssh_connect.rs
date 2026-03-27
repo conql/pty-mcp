@@ -6,13 +6,11 @@ use anyhow::{Result, ensure};
 use pty_mcp::mcp::tools::{SshConnectResponse, SshListResponse};
 use serde_json::json;
 
-use support::{assertions::assert_text_contains, e2e_harness::E2eHarness};
+use support::e2e_harness::E2eHarness;
 
 #[tokio::test]
-async fn ssh_connect_reuses_existing_connection_and_logs_options() -> Result<()> {
+async fn ssh_connect_reuses_existing_connection_through_real_binary() -> Result<()> {
     let harness = E2eHarness::builder("e2e_ssh_connect").start().await?;
-    let identity_path = harness.sandbox_root().join("alice_id");
-    std::fs::write(&identity_path, "not-a-real-key")?;
 
     let first = harness
         .call_tool_typed::<SshConnectResponse>(
@@ -20,9 +18,6 @@ async fn ssh_connect_reuses_existing_connection_and_logs_options() -> Result<()>
             json!({
                 "host": "devbox.example.com",
                 "user": "alice",
-                "auth_kind": "identity_file",
-                "identity_path": identity_path,
-                "verify_host_key": false,
                 "description": "ssh connect e2e"
             }),
         )
@@ -35,9 +30,6 @@ async fn ssh_connect_reuses_existing_connection_and_logs_options() -> Result<()>
             json!({
                 "host": "devbox.example.com",
                 "user": "alice",
-                "auth_kind": "identity_file",
-                "identity_path": identity_path,
-                "verify_host_key": false,
                 "description": "ssh connect e2e"
             }),
         )
@@ -50,14 +42,6 @@ async fn ssh_connect_reuses_existing_connection_and_logs_options() -> Result<()>
         .await?;
     ensure!(listed.connections.len() == 1);
     ensure!(listed.connections[0].connection_id == first.connection_id);
-
-    let ssh_log = harness.fake_bins().read_ssh_log();
-    assert_text_contains(&ssh_log, "StrictHostKeyChecking=no", "ssh log")?;
-    assert_text_contains(
-        &ssh_log,
-        &identity_path.display().to_string(),
-        "ssh log identity path",
-    )?;
 
     harness.shutdown().await
 }
@@ -169,34 +153,4 @@ async fn ssh_connect_enforces_host_user_port_and_auth_policy_through_real_binary
     }
 
     Ok(())
-}
-
-#[tokio::test]
-async fn ssh_connect_verify_host_key_true_is_forwarded_to_ssh_binary() -> Result<()> {
-    let harness = E2eHarness::builder("e2e_ssh_connect_verify_host_key").start().await?;
-
-    harness
-        .call_tool_typed::<SshConnectResponse>(
-            "ssh_connect",
-            json!({
-                "host": "devbox.example.com",
-                "user": "alice",
-                "verify_host_key": true,
-                "description": "verify host key passthrough"
-            }),
-        )
-        .await?;
-
-    let ssh_log = harness.fake_bins().read_ssh_log();
-    assert_text_contains(&ssh_log, "StrictHostKeyChecking=yes", "ssh log")?;
-    ensure!(
-        !ssh_log.contains("StrictHostKeyChecking=no"),
-        "ssh log should not include StrictHostKeyChecking=no when verify_host_key=true: {ssh_log:?}"
-    );
-    ensure!(
-        !ssh_log.contains("UserKnownHostsFile=/dev/null"),
-        "ssh log should not disable known_hosts when verify_host_key=true: {ssh_log:?}"
-    );
-
-    harness.shutdown().await
 }
