@@ -80,7 +80,7 @@ impl FakeBins {
         write_fake_executable(
             &sshfs_path,
             &format!(
-                "#!/bin/sh\nset -eu\nlog={log}\nprintf 'sshfs argc=%s argv=%s\\n' \"$#\" \"$*\" >> \"$log\"\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p -- \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
+                "#!/bin/sh\nset -eu\nlog={log}\nprintf 'sshfs argc=%s argv=%s\\n' \"$#\" \"$*\" >> \"$log\"\nif [ \"${{1:-}}\" = \"--version\" ] || [ \"${{1:-}}\" = \"-V\" ]; then echo 'SSHFS 3.7.3 (macFUSE 4.6.0)'; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p -- \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
                 log = shell_quote(&sshfs_log_path),
             ),
         )?;
@@ -88,7 +88,7 @@ impl FakeBins {
         write_fake_executable(
             &umount_path,
             &format!(
-                "#!/bin/sh\nset -eu\nlog={log}\nprintf 'umount argc=%s argv=%s\\n' \"$#\" \"$*\" >> \"$log\"\ntarget=''\nfor arg in \"$@\"; do target=\"$arg\"; done\nrm -f -- \"$target/.sshfs-mounted\"\n",
+                "#!/bin/sh\nset -eu\nlog={log}\nprintf 'umount argc=%s argv=%s\\n' \"$#\" \"$*\" >> \"$log\"\nif [ \"${{1:-}}\" = \"--version\" ] || [ \"${{1:-}}\" = \"-V\" ]; then echo 'umount util-linux 2.39'; exit 0; fi\ntarget=''\nfor arg in \"$@\"; do target=\"$arg\"; done\nrm -f -- \"$target/.sshfs-mounted\"\n",
                 log = shell_quote(&umount_log_path),
             ),
         )?;
