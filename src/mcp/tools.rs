@@ -1,7 +1,5 @@
-use anyhow::Error as AnyError;
 use rmcp::{
-    ErrorData, Json, handler::server::wrapper::Parameters, model::CallToolResult, tool,
-    tool_router,
+    ErrorData, Json, handler::server::wrapper::Parameters, model::CallToolResult, tool, tool_router,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,9 +8,9 @@ use serde_json::{json, to_value};
 use crate::{
     AppState, SpawnSessionRequest,
     app::{
-        SshConnectRequest as AppSshConnectRequest, SshDisconnectRequest as AppSshDisconnectRequest,
-        SshExecRequest as AppSshExecRequest, SshMountRequest as AppSshMountRequest,
-        SshDirectoryEntryType, SshSessionSpawnRequest as AppSshSessionSpawnRequest,
+        SshConnectRequest as AppSshConnectRequest, SshDirectoryEntryType,
+        SshDisconnectRequest as AppSshDisconnectRequest, SshExecRequest as AppSshExecRequest,
+        SshMountRequest as AppSshMountRequest, SshSessionSpawnRequest as AppSshSessionSpawnRequest,
         SshUnmountRequest as AppSshUnmountRequest,
     },
     buffer::{BufferReadPage, BufferReadRequest, BufferView},
@@ -147,7 +145,9 @@ pub struct SshConnectRequest {
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_path: Option<String>,
-    #[schemars(description = "Authentication mode. Allowed values: agent | key | password. Default: auto-detect from local SSH configuration.")]
+    #[schemars(
+        description = "Authentication mode. Allowed values: agent | key | password. Default: auto-detect from local SSH configuration."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_kind: Option<SshAuthKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,7 +234,9 @@ pub struct SshMountRequest {
     pub local_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_only: Option<bool>,
-    #[schemars(description = "Mount backend. Allowed values: sshfs. Default: automatic backend selection.")]
+    #[schemars(
+        description = "Mount backend. Allowed values: sshfs. Default: automatic backend selection."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<SshMountBackend>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -375,7 +377,9 @@ pub struct SshMkdirResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PtyKillRequest {
     pub session_id: SessionId,
-    #[schemars(description = "Signal to send to the PTY process. Allowed values: sigint | sigterm | sigkill. Default: sigterm.")]
+    #[schemars(
+        description = "Signal to send to the PTY process. Allowed values: sigint | sigterm | sigkill. Default: sigterm."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<SignalKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -419,20 +423,10 @@ fn structured<T: Serialize>(value: &T) -> Result<CallToolResult, rmcp::ErrorData
 // `ErrorData` is reserved for MCP protocol failures such as invalid params or
 // serialization issues. Tool execution failures must flow through
 // `CallToolResult` with `is_error = true`.
-fn tool_execution_error(error: AnyError) -> CallToolResult {
-    let mut body = json!({
+fn tool_execution_error(error: anyhow::Error) -> CallToolResult {
+    CallToolResult::structured_error(json!({
         "message": error.to_string(),
-    });
-
-    if let Some(error) = error.downcast_ref::<crate::PtyError>() {
-        body["message"] = json!(error.message);
-        body["error_code"] = json!(error.error_code.as_str());
-        if let Some(details) = &error.details {
-            body["details"] = details.clone();
-        }
-    }
-
-    CallToolResult::structured_error(body)
+    }))
 }
 
 #[tool_router(router = tool_router, vis = "pub(crate)")]
@@ -495,7 +489,7 @@ impl PtyMcpServer {
                     initial_output,
                 })
             }
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -523,7 +517,7 @@ impl PtyMcpServer {
                 accepted: outcome.accepted,
                 status: outcome.status,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -562,7 +556,7 @@ impl PtyMcpServer {
                     .unwrap_or(SessionStatus::Exited);
                 structured(&read_response_from_page(request.session_id, status, page))
             }
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -610,7 +604,7 @@ impl PtyMcpServer {
                 reused: result.reused,
                 capabilities: result.connection.capabilities,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -661,7 +655,7 @@ impl PtyMcpServer {
                 remote_cwd: spawned.remote_cwd,
                 started_at: spawned.started_at,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -697,7 +691,7 @@ impl PtyMcpServer {
                 remote_cwd: spawned.remote_cwd,
                 started_at: spawned.started_at,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -733,7 +727,7 @@ impl PtyMcpServer {
                 status: mount.status,
                 mounted_at: mount.mounted_at,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -762,7 +756,7 @@ impl PtyMcpServer {
                 local_path: result.mount.local_path,
                 cleanup_local_path: result.cleanup_local_path,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -791,7 +785,7 @@ impl PtyMcpServer {
                 closed_sessions: result.closed_sessions,
                 closed_mounts: result.closed_mounts,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -819,7 +813,7 @@ impl PtyMcpServer {
                 content: result.content,
                 bytes_read: result.bytes_read,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -849,7 +843,7 @@ impl PtyMcpServer {
                 bytes_written: result.bytes_written,
                 append: result.append,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -891,7 +885,7 @@ impl PtyMcpServer {
                     })
                     .collect(),
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -918,7 +912,7 @@ impl PtyMcpServer {
                 path: result.path,
                 parents: result.parents,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -946,7 +940,7 @@ impl PtyMcpServer {
                 current_status: outcome.current_status,
                 cleanup: outcome.cleanup,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 
@@ -977,7 +971,7 @@ impl PtyMcpServer {
                     .and_then(|info| info.exit_signal.clone()),
                 last_output_preview: outcome.last_output_preview,
             }),
-            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(AnyError::new(error))),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }
 }
@@ -1040,7 +1034,7 @@ async fn capture_initial_output(
     wait_for_output_ms: u64,
     limit: usize,
     view: BufferView,
-) -> Result<Option<PtyOutputSnapshot>, crate::PtyError> {
+) -> anyhow::Result<Option<PtyOutputSnapshot>> {
     let started = tokio::time::Instant::now();
 
     loop {

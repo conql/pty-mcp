@@ -65,12 +65,7 @@ impl SshPolicy {
         }
     }
 
-    pub fn validate_target(
-        &self,
-        host: &str,
-        user: Option<&str>,
-        port: Option<u16>,
-    ) -> Result<()> {
+    pub fn validate_target(&self, host: &str, user: Option<&str>, port: Option<u16>) -> Result<()> {
         let normalized_host =
             normalize_value(host).ok_or_else(|| anyhow::anyhow!("ssh host cannot be empty"))?;
 
@@ -138,9 +133,9 @@ impl SshPolicy {
             SshAuthKind::ConfigAlias => {
                 ensure!(
                     host_alias
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .is_some(),
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .is_some(),
                     "host_alias is required when auth_kind=config_alias"
                 );
             }

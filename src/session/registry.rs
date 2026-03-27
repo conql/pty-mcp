@@ -396,7 +396,10 @@ impl SessionRegistry {
             .read()
             .expect("session registry poisoned");
         if sessions.len() >= self.inner.session_limit {
-            bail!("session limit reached: session_limit={}", self.inner.session_limit);
+            bail!(
+                "session limit reached: session_limit={}",
+                self.inner.session_limit
+            );
         }
         Ok(())
     }

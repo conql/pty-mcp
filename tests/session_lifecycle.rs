@@ -137,8 +137,9 @@ async fn app_state_kill_with_cleanup_removes_session_and_logs() -> anyhow::Resul
     let read_error = app
         .read_session(&session.session_id, &default_read_request())
         .expect_err("cleanup=true should remove retained logs");
-    assert!(read_error.message.contains("session not found"));
-    assert!(read_error.message.contains(session.session_id.as_str()));
+    let text = format!("{read_error:#}");
+    assert!(text.contains("session not found"));
+    assert!(text.contains(session.session_id.as_str()));
 
     Ok(())
 }

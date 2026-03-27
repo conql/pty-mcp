@@ -162,10 +162,7 @@ impl BufferStore {
         self.lines.len() + usize::from(self.pending_line_number.is_some())
     }
 
-    fn filter_lines<'a>(
-        &'a self,
-        request: &BufferReadRequest,
-    ) -> Result<Vec<ReadLineRef<'a>>> {
+    fn filter_lines<'a>(&'a self, request: &BufferReadRequest) -> Result<Vec<ReadLineRef<'a>>> {
         let mut lines = self
             .lines
             .iter()

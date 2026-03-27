@@ -1,5 +1,4 @@
 use pty_mcp::{
-    PtyError, PtyErrorCode,
     session::{BufferStats, SessionStatus, SessionSummary, SessionTransport},
     ssh::SshConnectionId,
 };
@@ -42,26 +41,4 @@ fn session_summary_supports_remote_context_fields() {
     assert_eq!(value["remote_cwd"], "/srv/project");
     assert_eq!(value["remote_command"], "bash -lc pwd");
     assert_eq!(value["remote_env_preview"]["TERM"], "xterm-256color");
-}
-
-#[test]
-fn pty_error_produces_stable_structured_payload() {
-    let result = PtyError::new(PtyErrorCode::InvalidArgument, "bad request")
-        .to_call_tool_result()
-        .structured_content
-        .expect("structured error payload");
-
-    assert_eq!(result["error_code"], "INVALID_ARGUMENT");
-    assert_eq!(result["message"], "bad request");
-}
-
-#[test]
-fn ssh_error_codes_remain_stable() {
-    let result = PtyError::new(PtyErrorCode::SshCapabilityUnavailable, "missing sshfs")
-        .to_call_tool_result()
-        .structured_content
-        .expect("structured error payload");
-
-    assert_eq!(result["error_code"], "SSH_CAPABILITY_UNAVAILABLE");
-    assert_eq!(result["message"], "missing sshfs");
 }

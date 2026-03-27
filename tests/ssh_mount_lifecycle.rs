@@ -5,7 +5,7 @@ use std::{
 };
 
 use pty_mcp::{
-    AppState, Config, PtyErrorCode,
+    AppState, Config,
     app::{SshMountRequest, SshUnmountRequest},
     ssh::{SshConnectionStatus, SshMountId, SshMountStatus, SshTarget},
 };
@@ -185,7 +185,9 @@ async fn ssh_mount_reports_capability_unavailable_when_sshfs_missing() -> anyhow
         })
         .await
         .expect_err("mount should fail when sshfs is unavailable");
-    assert_eq!(error.error_code, PtyErrorCode::SshCapabilityUnavailable);
+    let text = format!("{error:#}");
+    assert!(text.contains("capability"));
+    assert!(text.contains("sshfs"));
     Ok(())
 }
 
@@ -200,7 +202,8 @@ async fn ssh_unmount_reports_missing_mount() -> anyhow::Result<()> {
         })
         .await
         .expect_err("missing mount should fail");
-    assert_eq!(error.error_code, PtyErrorCode::SshMountNotFound);
+    let text = format!("{error:#}");
+    assert!(text.contains("ssh mount not found"));
     Ok(())
 }
 
@@ -236,7 +239,8 @@ async fn ssh_mount_failures_are_recorded_on_mount_summary() -> anyhow::Result<()
         })
         .await
         .expect_err("mount should fail");
-    assert_eq!(error.error_code, PtyErrorCode::SshMountFailed);
+    let text = format!("{error:#}");
+    assert!(text.contains("ssh mount failed"));
 
     let mounts = app.ssh_list_mounts();
     assert_eq!(mounts.len(), 1);

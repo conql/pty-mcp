@@ -3,6 +3,15 @@
 A MCP server for PTY (pseudo-terminal) management, also with SSH connection, remote session,
 remote file, remote directory, and mount management.
 
+## Status
+
+The `anyhow` migration is in progress.
+
+- Internal modules now use `anyhow::Result<_>`.
+- `AppState` and MCP tool boundaries now report plain message/context chains instead of project-specific error codes.
+- The legacy `src/error.rs` error layer has been removed.
+- The current repository state is green: `cargo check` and `cargo test --quiet` pass.
+
 ## Usage
 
 Add the following mcp configuration to your `~/.codex/config.toml`:

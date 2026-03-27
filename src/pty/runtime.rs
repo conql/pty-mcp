@@ -182,10 +182,7 @@ impl PtySessionHandle {
             .map_err(|join_error| anyhow!("signal task failed: {join_error}"))?
     }
 
-    pub async fn wait(
-        &self,
-        timeout: Option<Duration>,
-    ) -> Result<Option<RuntimeExitStatus>> {
+    pub async fn wait(&self, timeout: Option<Duration>) -> Result<Option<RuntimeExitStatus>> {
         if let Some(result) = self.exit_status() {
             return result.map(Some).map_err(|message| anyhow!(message));
         }
@@ -193,9 +190,10 @@ impl PtySessionHandle {
         let mut exit_rx = self.inner.exit_tx.subscribe();
         let changed = async {
             loop {
-                exit_rx.changed().await.map_err(|_| {
-                    anyhow!("exit watcher unexpectedly closed")
-                })?;
+                exit_rx
+                    .changed()
+                    .await
+                    .map_err(|_| anyhow!("exit watcher unexpectedly closed"))?;
 
                 if let Some(result) = exit_rx.borrow().clone() {
                     return result.map(Some).map_err(|message| anyhow!(message));
@@ -290,10 +288,12 @@ fn spawn_blocking(request: PtySpawnRequest) -> Result<SpawnArtifacts> {
         command.env(key, value);
     }
 
-    let child = pair
-        .slave
-        .spawn_command(command)
-        .map_err(|source| anyhow!("failed to spawn PTY command '{}': {source}", request.command))?;
+    let child = pair.slave.spawn_command(command).map_err(|source| {
+        anyhow!(
+            "failed to spawn PTY command '{}': {source}",
+            request.command
+        )
+    })?;
 
     drop(pair.slave);
 

@@ -115,11 +115,7 @@ impl SshGuard {
         })
     }
 
-    fn validate_host_user_port(
-        &self,
-        config: &SshConfig,
-        target: &SshTarget,
-    ) -> Result<()> {
+    fn validate_host_user_port(&self, config: &SshConfig, target: &SshTarget) -> Result<()> {
         let host = target.host.trim();
         let host_alias = target.host_alias.as_deref().unwrap_or_default().trim();
         let user = target.user.as_deref().unwrap_or_default().trim();
@@ -215,7 +211,9 @@ fn validate_identity_path(
             let path = identity_path
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("identity_path is required when auth_kind=identity_file"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("identity_path is required when auth_kind=identity_file")
+                })?;
             let path = PathBuf::from(path);
             ensure!(
                 path.is_absolute(),

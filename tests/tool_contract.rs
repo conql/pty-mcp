@@ -305,9 +305,12 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
         )
         .await?;
     assert_eq!(missing_read.is_error, Some(true));
-    assert_eq!(
-        missing_read.structured_content.expect("structured error")["error_code"],
-        "SESSION_NOT_FOUND"
+    let body = missing_read.structured_content.expect("structured error");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("error message")
+            .contains("session not found")
     );
 
     client.cancel().await?;
@@ -359,7 +362,12 @@ async fn pty_read_reports_invalid_regex_stably() -> anyhow::Result<()> {
 
     assert_eq!(read_result.is_error, Some(true));
     let body = read_result.structured_content.expect("structured error");
-    assert_eq!(body["error_code"], "INVALID_REGEX");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("error message")
+            .contains("invalid regex pattern")
+    );
 
     client.cancel().await?;
     server_handle.await??;
@@ -604,7 +612,7 @@ async fn wait_for_read_match(
                     .expect("read args object")
                     .clone(),
                 ),
-        )
+            )
             .await?;
         let payload = result.into_typed::<PtyReadResponse>()?;
         if payload.lines.contains(needle) {

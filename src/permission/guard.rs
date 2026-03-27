@@ -35,10 +35,7 @@ impl PermissionGuard {
         &self.policy
     }
 
-    pub fn validate_spawn(
-        &self,
-        input: SpawnValidationInput<'_>,
-    ) -> Result<SpawnValidationResult> {
+    pub fn validate_spawn(&self, input: SpawnValidationInput<'_>) -> Result<SpawnValidationResult> {
         let command = self.validate_command(input.command)?;
         let cwd = self.validate_cwd(input.cwd)?;
         let env = self.validate_env(input.env)?;
@@ -100,10 +97,7 @@ impl PermissionGuard {
         Ok(Some(canonical_cwd))
     }
 
-    fn validate_env(
-        &self,
-        env: Option<&Map<String, Value>>,
-    ) -> Result<BTreeMap<String, String>> {
+    fn validate_env(&self, env: Option<&Map<String, Value>>) -> Result<BTreeMap<String, String>> {
         let Some(env) = env else {
             return Ok(BTreeMap::new());
         };

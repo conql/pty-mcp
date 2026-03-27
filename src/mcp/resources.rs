@@ -246,8 +246,8 @@ fn read_ssh_connection_resource(app: &AppState, uri: &str) -> Result<ResourceCon
         .strip_prefix("ssh://connections/")
         .filter(|id| !id.is_empty() && !id.contains('/'))
         .ok_or_else(resource_not_found)?;
-    let connection_id = crate::ssh::SshConnectionId::from_str(connection_id)
-        .map_err(|_| resource_not_found())?;
+    let connection_id =
+        crate::ssh::SshConnectionId::from_str(connection_id).map_err(|_| resource_not_found())?;
     let connection = app
         .ssh_get_connection(&connection_id)
         .ok_or_else(resource_not_found)?;
@@ -263,8 +263,7 @@ fn read_ssh_mount_resource(app: &AppState, uri: &str) -> Result<ResourceContents
         .strip_prefix("ssh://mounts/")
         .filter(|id| !id.is_empty() && !id.contains('/'))
         .ok_or_else(resource_not_found)?;
-    let mount_id = crate::ssh::SshMountId::from_str(mount_id)
-        .map_err(|_| resource_not_found())?;
+    let mount_id = crate::ssh::SshMountId::from_str(mount_id).map_err(|_| resource_not_found())?;
     let mount = app
         .ssh_get_mount(&mount_id)
         .ok_or_else(resource_not_found)?;

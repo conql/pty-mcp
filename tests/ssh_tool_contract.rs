@@ -1,6 +1,6 @@
 use chrono::Utc;
 use pty_mcp::{
-    AppState, Config, PtyErrorCode, PtyMcpServer,
+    AppState, Config, PtyMcpServer,
     app::SshDisconnectRequest,
     mcp::tools::{
         PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse,
@@ -124,7 +124,9 @@ fn disconnect_precheck_rejects_connection_with_active_sessions() {
     let error = app
         .ssh_disconnect_precheck(&connection.connection_id)
         .expect_err("disconnect should be rejected");
-    assert_eq!(error.error_code, PtyErrorCode::SshActiveSessionExists);
+    let text = format!("{error:#}");
+    assert!(text.contains("active sessions"));
+    assert!(text.contains(connection.connection_id.as_str()));
 }
 
 #[test]
@@ -146,7 +148,9 @@ fn disconnect_precheck_rejects_connection_with_active_mounts() {
     let error = app
         .ssh_disconnect_precheck(&connection.connection_id)
         .expect_err("disconnect should be rejected");
-    assert_eq!(error.error_code, PtyErrorCode::SshActiveMountExists);
+    let text = format!("{error:#}");
+    assert!(text.contains("active mounts"));
+    assert!(text.contains(connection.connection_id.as_str()));
 }
 
 #[test]
@@ -181,7 +185,9 @@ async fn force_disconnect_requires_cleanup_mounts_to_remove_active_mounts() {
         })
         .await
         .expect_err("disconnect should require cleanup_mounts=true");
-    assert_eq!(error.error_code, PtyErrorCode::SshActiveMountExists);
+    let text = format!("{error:#}");
+    assert!(text.contains("active mounts"));
+    assert!(text.contains("cleanup_mounts=true"));
 }
 
 #[test]
@@ -192,7 +198,9 @@ fn disconnect_precheck_reports_missing_connection() {
     let error = app
         .ssh_disconnect_precheck(&unknown_id)
         .expect_err("unknown connection should fail");
-    assert_eq!(error.error_code, PtyErrorCode::SshConnectionNotFound);
+    let text = format!("{error:#}");
+    assert!(text.contains("ssh connection not found"));
+    assert!(text.contains(unknown_id.as_str()));
 }
 
 #[derive(Debug, Clone, Default)]
@@ -509,9 +517,12 @@ async fn ssh_connect_reports_capability_unavailable_when_ssh_missing() -> anyhow
         )
         .await?;
     assert_eq!(result.is_error, Some(true));
-    assert_eq!(
-        result.structured_content.expect("structured error")["error_code"],
-        "SSH_CAPABILITY_UNAVAILABLE"
+    let body = result.structured_content.expect("structured error");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("error message")
+            .contains("ssh capability is unavailable")
     );
 
     client.cancel().await?;
@@ -951,10 +962,7 @@ async fn ssh_file_and_directory_tools_operate_over_existing_connection() -> anyh
         .await?
         .into_typed::<SshWriteFileResponse>()?;
     assert_eq!(written.bytes_written, "alpha\nbeta\n".len());
-    assert_eq!(
-        fs::read_to_string(&written.path)?,
-        "alpha\nbeta\n"
-    );
+    assert_eq!(fs::read_to_string(&written.path)?, "alpha\nbeta\n");
 
     let appended = client
         .call_tool(
@@ -1068,8 +1076,9 @@ async fn ssh_read_file_enforces_max_bytes() -> anyhow::Result<()> {
         .await?;
     assert_eq!(result.is_error, Some(true));
     let structured = result.structured_content.expect("structured error");
-    assert_eq!(structured["error_code"], "READ_FAILED");
-    assert_eq!(structured["message"], "remote file exceeds max_bytes");
+    let message = structured["message"].as_str().expect("error message");
+    assert!(message.contains("remote file exceeds max_bytes"));
+    assert!(message.contains("max_bytes=4"));
 
     client.cancel().await?;
     server_handle.await??;

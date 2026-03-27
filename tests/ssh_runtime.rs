@@ -4,9 +4,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use pty_mcp::{
-    ssh::{SshAuthKind, SshRuntime, SshTarget, runtime::SshConnectVerificationRequest},
-};
+use pty_mcp::ssh::{SshAuthKind, SshRuntime, SshTarget, runtime::SshConnectVerificationRequest};
 
 #[derive(Debug)]
 struct TempDirGuard {

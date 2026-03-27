@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use chrono::Utc;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -9,7 +10,6 @@ use crate::ssh::runtime::{
     SshConnectVerificationRequest, SshExecPlanRequest, SshSessionSpawnPlanRequest, shell_escape,
 };
 use crate::{
-    PtyError,
     buffer::{BufferReadPage, BufferReadRequest},
     config::{Config, SshConfig},
     permission::{PermissionGuard, PermissionPolicy, SpawnValidationInput},
@@ -266,18 +266,12 @@ impl AppState {
             .create_placeholder_connection(target, self.ssh_capabilities.clone())
     }
 
-    pub async fn ssh_connect(
-        &self,
-        request: SshConnectRequest,
-    ) -> Result<SshConnectResult, PtyError> {
+    pub async fn ssh_connect(&self, request: SshConnectRequest) -> Result<SshConnectResult> {
         if !self.ssh_capabilities.ssh.available {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::SshCapabilityUnavailable,
-                "ssh capability is unavailable on this host",
-            )
-            .with_details(serde_json::json!({
-                "capabilities": self.ssh_capabilities,
-            })));
+            bail!(
+                "ssh capability is unavailable on this host: capabilities={:?}",
+                self.ssh_capabilities
+            );
         }
 
         let tentative_target = SshTarget {
@@ -304,15 +298,17 @@ impl AppState {
             port: request.port,
         };
 
-        let validated = self.ssh_guard.validate_connect_request(
-            &self.ssh_config,
-            crate::ssh::guard::SshConnectValidationInput {
-                target: &tentative_target,
-                auth_kind: request.auth_kind.clone(),
-                identity_path: request.identity_path.as_deref(),
-            },
-        )
-        .map_err(map_policy_error)?;
+        let validated = self
+            .ssh_guard
+            .validate_connect_request(
+                &self.ssh_config,
+                crate::ssh::guard::SshConnectValidationInput {
+                    target: &tentative_target,
+                    auth_kind: request.auth_kind.clone(),
+                    identity_path: request.identity_path.as_deref(),
+                },
+            )
+            .map_err(map_policy_error)?;
         let identity_path = validated.identity_path.clone();
 
         if let Some(existing) =
@@ -346,12 +342,7 @@ impl AppState {
                     .as_ref()
                     .map(std::path::PathBuf::from)
             })
-            .ok_or_else(|| {
-                PtyError::new(
-                    crate::PtyErrorCode::SshCapabilityUnavailable,
-                    "ssh binary path could not be resolved",
-                )
-            })?;
+            .ok_or_else(|| anyhow!("ssh binary path could not be resolved"))?;
 
         self.ssh_runtime
             .verify_connection(SshConnectVerificationRequest {
@@ -478,7 +469,7 @@ impl AppState {
         &self,
         connection_id: &SshConnectionId,
         session_id: SessionId,
-    ) -> Result<SshConnectionSummary, PtyError> {
+    ) -> Result<SshConnectionSummary> {
         self.ssh_registry
             .track_session(connection_id, session_id)
             .map_err(map_registry_error)
@@ -488,7 +479,7 @@ impl AppState {
         &self,
         connection_id: &SshConnectionId,
         session_id: &SessionId,
-    ) -> Result<SshConnectionSummary, PtyError> {
+    ) -> Result<SshConnectionSummary> {
         self.ssh_registry
             .untrack_session(connection_id, session_id)
             .map_err(map_registry_error)
@@ -497,7 +488,7 @@ impl AppState {
     pub fn ssh_connection_relations(
         &self,
         connection_id: &SshConnectionId,
-    ) -> Result<SshConnectionRelations, PtyError> {
+    ) -> Result<SshConnectionRelations> {
         self.ssh_registry
             .connection_relations(connection_id)
             .map_err(map_registry_error)
@@ -510,63 +501,56 @@ impl AppState {
         self.ssh_registry.active_resource_counts(connection_id)
     }
 
-    pub fn ssh_disconnect_precheck(&self, connection_id: &SshConnectionId) -> Result<(), PtyError> {
+    pub fn ssh_disconnect_precheck(&self, connection_id: &SshConnectionId) -> Result<()> {
         self.refresh_ssh_connection_session_tracking(connection_id);
         self.ssh_registry
             .ensure_disconnect_allowed(connection_id)
             .map_err(map_registry_error)
     }
 
-    pub async fn ssh_mount(&self, request: SshMountRequest) -> Result<SshMountSummary, PtyError> {
+    pub async fn ssh_mount(&self, request: SshMountRequest) -> Result<SshMountSummary> {
         let connection = self
             .ssh_registry
             .get_connection(&request.connection_id)
             .ok_or_else(|| {
-                PtyError::new(
-                    crate::PtyErrorCode::SshConnectionNotFound,
-                    "ssh connection not found",
+                anyhow!(
+                    "ssh connection not found: connection_id={}",
+                    request.connection_id.as_str()
                 )
-                .with_details(serde_json::json!({
-                    "connection_id": request.connection_id.as_str(),
-                }))
             })?;
 
         if !matches!(
             connection.status,
             SshConnectionStatus::Ready | SshConnectionStatus::Degraded
         ) {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::SshConnectionNotReady,
-                "ssh connection is not ready for mounting",
-            )
-            .with_details(serde_json::json!({
-                "connection_id": request.connection_id.as_str(),
-                "status": connection.status,
-            })));
+            bail!(
+                "ssh connection is not ready for mounting: connection_id={} status={:?}",
+                request.connection_id.as_str(),
+                connection.status
+            );
         }
 
         if !self.ssh_capabilities.sshfs.available {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::SshCapabilityUnavailable,
-                "sshfs capability is unavailable on this host",
-            )
-            .with_details(serde_json::json!({
-                "capabilities": self.ssh_capabilities,
-            })));
+            bail!(
+                "sshfs capability is unavailable on this host: capabilities={:?}",
+                self.ssh_capabilities
+            );
         }
 
         let backend = request
             .backend
             .unwrap_or(crate::ssh::SshMountBackend::Sshfs);
         let local_path = self.resolve_mount_local_path(&request.local_path)?;
-        let validated = self.ssh_guard.validate_mount_request(
-            &self.ssh_config,
-            crate::ssh::guard::SshMountValidationInput {
-                local_path: &local_path,
-                remote_path: &request.remote_path,
-            },
-        )
-        .map_err(map_policy_error)?;
+        let validated = self
+            .ssh_guard
+            .validate_mount_request(
+                &self.ssh_config,
+                crate::ssh::guard::SshMountValidationInput {
+                    local_path: &local_path,
+                    remote_path: &request.remote_path,
+                },
+            )
+            .map_err(map_policy_error)?;
 
         let created_local_path =
             self.ensure_mount_local_path(&validated.local_path, request.create_local_path)?;
@@ -624,18 +608,15 @@ impl AppState {
         }
     }
 
-    pub async fn ssh_unmount(
-        &self,
-        request: SshUnmountRequest,
-    ) -> Result<SshUnmountResult, PtyError> {
+    pub async fn ssh_unmount(&self, request: SshUnmountRequest) -> Result<SshUnmountResult> {
         let mount = self
             .ssh_registry
             .get_mount(&request.mount_id)
             .ok_or_else(|| {
-                PtyError::new(crate::PtyErrorCode::SshMountNotFound, "ssh mount not found")
-                    .with_details(serde_json::json!({
-                        "mount_id": request.mount_id.as_str(),
-                    }))
+                anyhow!(
+                    "ssh mount not found: mount_id={}",
+                    request.mount_id.as_str()
+                )
             })?;
 
         let context = self.mount_runtime_context_for_mount(&request.mount_id);
@@ -686,18 +667,15 @@ impl AppState {
     pub async fn ssh_disconnect(
         &self,
         request: SshDisconnectRequest,
-    ) -> Result<SshDisconnectResult, PtyError> {
+    ) -> Result<SshDisconnectResult> {
         let connection = self
             .ssh_registry
             .get_connection(&request.connection_id)
             .ok_or_else(|| {
-                PtyError::new(
-                    crate::PtyErrorCode::SshConnectionNotFound,
-                    "ssh connection not found",
+                anyhow!(
+                    "ssh connection not found: connection_id={}",
+                    request.connection_id.as_str()
                 )
-                .with_details(serde_json::json!({
-                    "connection_id": request.connection_id.as_str(),
-                }))
             })?;
         let previous_status = connection.status.clone();
         let connection_id = request.connection_id.clone();
@@ -718,21 +696,18 @@ impl AppState {
             .map(|counts| counts.active_mount_count)
             .unwrap_or(0);
         if request.force && active_mount_count > 0 && !request.cleanup_mounts {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::SshActiveMountExists,
-                "ssh connection still has active mounts; set cleanup_mounts=true to force disconnect",
-            )
-            .with_details(serde_json::json!({
-                "connection_id": request.connection_id.as_str(),
-                "active_mount_count": active_mount_count,
-            })));
+            bail!(
+                "ssh connection still has active mounts; set cleanup_mounts=true to force disconnect: connection_id={} active_mount_count={}",
+                request.connection_id.as_str(),
+                active_mount_count
+            );
         }
 
         let _ = self
             .ssh_registry
             .mark_connection_status(&request.connection_id, SshConnectionStatus::Disconnecting);
 
-        let result = async {
+        let result: Result<SshDisconnectResult> = async {
             let mut closed_mounts = 0usize;
             let mut closed_sessions = 0usize;
 
@@ -784,7 +759,7 @@ impl AppState {
                 .map(|summary| summary.status)
                 .unwrap_or(SshConnectionStatus::Disconnected);
 
-            Ok::<SshDisconnectResult, PtyError>(SshDisconnectResult {
+            Ok::<SshDisconnectResult, anyhow::Error>(SshDisconnectResult {
                 connection_id,
                 previous_status,
                 current_status,
@@ -806,32 +781,26 @@ impl AppState {
     pub async fn ssh_session_spawn(
         &self,
         request: SshSessionSpawnRequest,
-    ) -> Result<SessionSummary, PtyError> {
+    ) -> Result<SessionSummary> {
         let connection = self
             .ssh_registry
             .get_connection(&request.connection_id)
             .ok_or_else(|| {
-                PtyError::new(
-                    crate::PtyErrorCode::SshConnectionNotFound,
-                    "ssh connection not found",
+                anyhow!(
+                    "ssh connection not found: connection_id={}",
+                    request.connection_id.as_str()
                 )
-                .with_details(serde_json::json!({
-                    "connection_id": request.connection_id.as_str(),
-                }))
             })?;
 
         if !matches!(
             connection.status,
             SshConnectionStatus::Ready | SshConnectionStatus::Degraded
         ) {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::SshConnectionNotReady,
-                "ssh connection is not ready for remote session spawning",
-            )
-            .with_details(serde_json::json!({
-                "connection_id": request.connection_id.as_str(),
-                "status": connection.status,
-            })));
+            bail!(
+                "ssh connection is not ready for remote session spawning: connection_id={} status={:?}",
+                request.connection_id.as_str(),
+                connection.status
+            );
         }
 
         let context = self.runtime_context_for_connection(&connection);
@@ -839,12 +808,7 @@ impl AppState {
             .ssh_config
             .resolved_ssh_bin_path()
             .or_else(|| self.ssh_capabilities.ssh.path.as_ref().map(PathBuf::from))
-            .ok_or_else(|| {
-                PtyError::new(
-                    crate::PtyErrorCode::SshCapabilityUnavailable,
-                    "ssh binary path could not be resolved",
-                )
-            })?;
+            .ok_or_else(|| anyhow!("ssh binary path could not be resolved"))?;
 
         let remote_env_preview = normalize_remote_env_preview(request.env.as_ref())?;
         let remote_cwd = request
@@ -857,11 +821,7 @@ impl AppState {
             .as_deref()
             .is_some_and(|cwd| !is_valid_remote_cwd(cwd))
         {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::InvalidArgument,
-                "remote cwd must be an absolute path or home-relative path",
-            )
-            .with_details(serde_json::json!({ "cwd": remote_cwd })));
+            bail!("remote cwd must be an absolute path or home-relative path: cwd={remote_cwd:?}");
         }
 
         let spawn_plan = self
@@ -901,7 +861,10 @@ impl AppState {
             buffer_stats: Default::default(),
             exit_info: None,
         };
-        let session_id = self.registry.create_starting(summary).map_err(map_registry_error)?;
+        let session_id = self
+            .registry
+            .create_starting(summary)
+            .map_err(map_registry_error)?;
 
         match self
             .runtime
@@ -909,13 +872,9 @@ impl AppState {
             .await
         {
             Ok(spawned) => {
-                self.registry.attach_runtime(
-                    &session_id,
-                    spawned.pid,
-                    spawned.handle,
-                    spawned.output,
-                )
-                .map_err(map_registry_error)?;
+                self.registry
+                    .attach_runtime(&session_id, spawned.pid, spawned.handle, spawned.output)
+                    .map_err(map_registry_error)?;
                 let _ = self
                     .ssh_registry
                     .track_session(&connection.connection_id, session_id.clone());
@@ -932,32 +891,26 @@ impl AppState {
             .expect("session disappeared after ssh_session_spawn"))
     }
 
-    pub async fn ssh_exec(&self, request: SshExecRequest) -> Result<SessionSummary, PtyError> {
+    pub async fn ssh_exec(&self, request: SshExecRequest) -> Result<SessionSummary> {
         let connection = self
             .ssh_registry
             .get_connection(&request.connection_id)
             .ok_or_else(|| {
-                PtyError::new(
-                    crate::PtyErrorCode::SshConnectionNotFound,
-                    "ssh connection not found",
+                anyhow!(
+                    "ssh connection not found: connection_id={}",
+                    request.connection_id.as_str()
                 )
-                .with_details(serde_json::json!({
-                    "connection_id": request.connection_id.as_str(),
-                }))
             })?;
 
         if !matches!(
             connection.status,
             SshConnectionStatus::Ready | SshConnectionStatus::Degraded
         ) {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::SshConnectionNotReady,
-                "ssh connection is not ready for remote script execution",
-            )
-            .with_details(serde_json::json!({
-                "connection_id": request.connection_id.as_str(),
-                "status": connection.status,
-            })));
+            bail!(
+                "ssh connection is not ready for remote script execution: connection_id={} status={:?}",
+                request.connection_id.as_str(),
+                connection.status
+            );
         }
 
         let context = self.runtime_context_for_connection(&connection);
@@ -965,12 +918,7 @@ impl AppState {
             .ssh_config
             .resolved_ssh_bin_path()
             .or_else(|| self.ssh_capabilities.ssh.path.as_ref().map(PathBuf::from))
-            .ok_or_else(|| {
-                PtyError::new(
-                    crate::PtyErrorCode::SshCapabilityUnavailable,
-                    "ssh binary path could not be resolved",
-                )
-            })?;
+            .ok_or_else(|| anyhow!("ssh binary path could not be resolved"))?;
 
         let remote_env_preview = normalize_remote_env_preview(request.env.as_ref())?;
         let remote_cwd = request
@@ -983,36 +931,29 @@ impl AppState {
             .as_deref()
             .is_some_and(|cwd| !is_valid_remote_cwd(cwd))
         {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::InvalidArgument,
-                "remote cwd must be an absolute path or home-relative path",
-            )
-            .with_details(serde_json::json!({ "cwd": remote_cwd })));
+            bail!("remote cwd must be an absolute path or home-relative path: cwd={remote_cwd:?}");
         }
 
         let remote_script = request.script.trim().to_string();
         if remote_script.is_empty() {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::InvalidArgument,
-                "remote script cannot be empty",
-            ));
+            bail!("remote script cannot be empty");
         }
 
-        let spawn_plan =
-            self.ssh_runtime
-                .build_exec_plan(crate::ssh::runtime::SshExecPlanRequest {
-                    ssh_bin_path: Some(ssh_bin),
-                    target: connection.target.clone(),
-                    auth_kind: context.auth_kind,
-                    identity_path: context.identity_path.clone(),
-                    verify_host_key: context.verify_host_key,
-                    script: remote_script.clone(),
-                    cwd: remote_cwd.clone(),
-                    env: remote_env_preview.clone(),
-                    shell: request.shell.clone(),
-                    login: request.login,
-                })
-                .map_err(map_ssh_runtime_error)?;
+        let spawn_plan = self
+            .ssh_runtime
+            .build_exec_plan(crate::ssh::runtime::SshExecPlanRequest {
+                ssh_bin_path: Some(ssh_bin),
+                target: connection.target.clone(),
+                auth_kind: context.auth_kind,
+                identity_path: context.identity_path.clone(),
+                verify_host_key: context.verify_host_key,
+                script: remote_script.clone(),
+                cwd: remote_cwd.clone(),
+                env: remote_env_preview.clone(),
+                shell: request.shell.clone(),
+                login: request.login,
+            })
+            .map_err(map_ssh_runtime_error)?;
 
         let summary = SessionSummary {
             session_id: SessionId::new(),
@@ -1033,7 +974,10 @@ impl AppState {
             buffer_stats: Default::default(),
             exit_info: None,
         };
-        let session_id = self.registry.create_starting(summary).map_err(map_registry_error)?;
+        let session_id = self
+            .registry
+            .create_starting(summary)
+            .map_err(map_registry_error)?;
 
         match self
             .runtime
@@ -1041,13 +985,9 @@ impl AppState {
             .await
         {
             Ok(spawned) => {
-                self.registry.attach_runtime(
-                    &session_id,
-                    spawned.pid,
-                    spawned.handle,
-                    spawned.output,
-                )
-                .map_err(map_registry_error)?;
+                self.registry
+                    .attach_runtime(&session_id, spawned.pid, spawned.handle, spawned.output)
+                    .map_err(map_registry_error)?;
                 let _ = self
                     .ssh_registry
                     .track_session(&connection.connection_id, session_id.clone());
@@ -1069,7 +1009,7 @@ impl AppState {
         connection_id: &SshConnectionId,
         path: &str,
         max_bytes: usize,
-    ) -> Result<SshReadFileResult, PtyError> {
+    ) -> Result<SshReadFileResult> {
         let path = validate_remote_path(path, "ssh_read_file path")?;
         let max_bytes = validate_remote_max_bytes(max_bytes)?;
         let script = format!(
@@ -1089,38 +1029,32 @@ impl AppState {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if let Some(size) = parse_file_too_large_marker(&stderr) {
-                return Err(PtyError::new(
-                    crate::PtyErrorCode::ReadFailed,
-                    "remote file exceeds max_bytes",
-                )
-                .with_details(serde_json::json!({
-                    "connection_id": connection_id.as_str(),
-                    "path": path,
-                    "max_bytes": max_bytes,
-                    "actual_bytes": size,
-                })));
+                bail!(
+                    "remote file exceeds max_bytes: connection_id={} path={} max_bytes={} actual_bytes={}",
+                    connection_id.as_str(),
+                    path,
+                    max_bytes,
+                    size
+                );
             }
 
             return Err(remote_command_failed(
-                crate::PtyErrorCode::ReadFailed,
                 "failed to read remote file",
                 connection_id,
                 Some(path),
                 output,
-            ));
+            )
+            .into());
         }
 
         let bytes_read = output.stdout.len();
         let content = String::from_utf8(output.stdout).map_err(|_| {
-            PtyError::new(
-                crate::PtyErrorCode::ReadFailed,
-                "remote file is not valid UTF-8 text",
+            anyhow!(
+                "remote file is not valid UTF-8 text: connection_id={} path={} bytes_read={}",
+                connection_id.as_str(),
+                path,
+                bytes_read
             )
-            .with_details(serde_json::json!({
-                "connection_id": connection_id.as_str(),
-                "path": path,
-                "bytes_read": bytes_read,
-            }))
         })?;
 
         Ok(SshReadFileResult {
@@ -1138,7 +1072,7 @@ impl AppState {
         content: &str,
         append: bool,
         create_parent: bool,
-    ) -> Result<SshWriteFileResult, PtyError> {
+    ) -> Result<SshWriteFileResult> {
         let path = validate_remote_path(path, "ssh_write_file path")?;
         validate_remote_write_size(content)?;
         let redirect = if append { ">>" } else { ">" };
@@ -1166,7 +1100,6 @@ impl AppState {
             .await?;
         if !output.status.success() {
             return Err(remote_command_failed(
-                crate::PtyErrorCode::WriteFailed,
                 "failed to write remote file",
                 connection_id,
                 Some(path),
@@ -1187,7 +1120,7 @@ impl AppState {
         connection_id: &SshConnectionId,
         path: &str,
         include_hidden: bool,
-    ) -> Result<SshListDirectoryResult, PtyError> {
+    ) -> Result<SshListDirectoryResult> {
         let path = validate_remote_path(path, "ssh_list_dir path")?;
         let script = build_list_directory_script(path, include_hidden);
         let output = self
@@ -1200,7 +1133,6 @@ impl AppState {
             .await?;
         if !output.status.success() {
             return Err(remote_command_failed(
-                crate::PtyErrorCode::ReadFailed,
                 "failed to list remote directory",
                 connection_id,
                 Some(path),
@@ -1209,15 +1141,12 @@ impl AppState {
         }
 
         let entries = parse_directory_entries(&output.stdout).map_err(|reason| {
-            PtyError::new(
-                crate::PtyErrorCode::ReadFailed,
-                "failed to parse remote directory listing",
+            anyhow!(
+                "failed to parse remote directory listing: connection_id={} path={} reason={}",
+                connection_id.as_str(),
+                path,
+                reason
             )
-            .with_details(serde_json::json!({
-                "connection_id": connection_id.as_str(),
-                "path": path,
-                "reason": reason,
-            }))
         })?;
 
         Ok(SshListDirectoryResult {
@@ -1232,10 +1161,14 @@ impl AppState {
         connection_id: &SshConnectionId,
         path: &str,
         parents: bool,
-    ) -> Result<SshMkdirResult, PtyError> {
+    ) -> Result<SshMkdirResult> {
         let path = validate_remote_path(path, "ssh_mkdir path")?;
         let flag = if parents { "-p " } else { "" };
-        let script = format!("set -eu\nmkdir {flag}-- {path}", flag = flag, path = shell_escape(path));
+        let script = format!(
+            "set -eu\nmkdir {flag}-- {path}",
+            flag = flag,
+            path = shell_escape(path)
+        );
         let output = self
             .run_ssh_capture(
                 connection_id,
@@ -1246,7 +1179,6 @@ impl AppState {
             .await?;
         if !output.status.success() {
             return Err(remote_command_failed(
-                crate::PtyErrorCode::WriteFailed,
                 "failed to create remote directory",
                 connection_id,
                 Some(path),
@@ -1261,17 +1193,16 @@ impl AppState {
         })
     }
 
-    pub async fn spawn_session(
-        &self,
-        request: SpawnSessionRequest,
-    ) -> Result<SessionSummary, PtyError> {
-        let validated = self.guard.validate_spawn(SpawnValidationInput {
-            command: &request.command,
-            args: &request.args,
-            cwd: request.cwd.as_deref(),
-            env: request.env.as_ref(),
-        })
-        .map_err(map_policy_error)?;
+    pub async fn spawn_session(&self, request: SpawnSessionRequest) -> Result<SessionSummary> {
+        let validated = self
+            .guard
+            .validate_spawn(SpawnValidationInput {
+                command: &request.command,
+                args: &request.args,
+                cwd: request.cwd.as_deref(),
+                env: request.env.as_ref(),
+            })
+            .map_err(map_policy_error)?;
 
         let session = SessionSummary {
             session_id: SessionId::new(),
@@ -1292,7 +1223,10 @@ impl AppState {
             buffer_stats: Default::default(),
             exit_info: None,
         };
-        let session_id = self.registry.create_starting(session).map_err(map_registry_error)?;
+        let session_id = self
+            .registry
+            .create_starting(session)
+            .map_err(map_registry_error)?;
 
         let mut runtime_request = PtySpawnRequest::new(validated.command).args(validated.args);
         if let Some(cwd) = validated.cwd {
@@ -1304,13 +1238,9 @@ impl AppState {
 
         match self.runtime.spawn(runtime_request).await {
             Ok(spawned) => {
-                self.registry.attach_runtime(
-                    &session_id,
-                    spawned.pid,
-                    spawned.handle,
-                    spawned.output,
-                )
-                .map_err(map_registry_error)?;
+                self.registry
+                    .attach_runtime(&session_id, spawned.pid, spawned.handle, spawned.output)
+                    .map_err(map_registry_error)?;
             }
             Err(error) => {
                 let _ = self.registry.mark_failed_to_spawn(&session_id);
@@ -1329,7 +1259,7 @@ impl AppState {
         session_id: &SessionId,
         data: &str,
         escaped: bool,
-    ) -> Result<SessionWriteResult, PtyError> {
+    ) -> Result<SessionWriteResult> {
         if escaped {
             self.registry
                 .write_escaped(session_id, data)
@@ -1347,7 +1277,7 @@ impl AppState {
         &self,
         session_id: &SessionId,
         request: &BufferReadRequest,
-    ) -> Result<BufferReadPage, PtyError> {
+    ) -> Result<BufferReadPage> {
         self.registry
             .read_output(session_id, request)
             .map_err(map_registry_error)
@@ -1358,7 +1288,7 @@ impl AppState {
         session_id: &SessionId,
         signal: SignalKind,
         cleanup: bool,
-    ) -> Result<SessionKillResult, PtyError> {
+    ) -> Result<SessionKillResult> {
         let outcome = self
             .registry
             .kill(session_id, signal, cleanup)
@@ -1372,7 +1302,7 @@ impl AppState {
         &self,
         session_id: &SessionId,
         timeout: Option<std::time::Duration>,
-    ) -> Result<SessionWaitResult, PtyError> {
+    ) -> Result<SessionWaitResult> {
         let outcome = self
             .registry
             .wait(session_id, timeout)
@@ -1382,12 +1312,12 @@ impl AppState {
         Ok(outcome)
     }
 
-    pub async fn shutdown(&self) -> Result<(), PtyError> {
+    pub async fn shutdown(&self) -> Result<()> {
         self.shutdown_ssh().await?;
         self.registry.shutdown().await.map_err(map_registry_error)
     }
 
-    pub async fn shutdown_ssh(&self) -> Result<(), PtyError> {
+    pub async fn shutdown_ssh(&self) -> Result<()> {
         for connection in self.ssh_list_connections() {
             let _ = self
                 .ssh_disconnect(SshDisconnectRequest {
@@ -1510,15 +1440,12 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    fn resolve_mount_local_path(&self, local_path: &str) -> Result<PathBuf, PtyError> {
+    fn resolve_mount_local_path(&self, local_path: &str) -> Result<PathBuf> {
         let local_path = local_path.trim();
-        if local_path.is_empty() {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::InvalidArgument,
-                "ssh mount local_path cannot be empty",
-            ));
-        }
-
+        ensure!(
+            !local_path.is_empty(),
+            "ssh mount local_path cannot be empty"
+        );
         Ok(PathBuf::from(local_path))
     }
 
@@ -1526,39 +1453,29 @@ impl AppState {
         &self,
         local_path: &std::path::Path,
         create_local_path: bool,
-    ) -> Result<bool, PtyError> {
+    ) -> Result<bool> {
         if local_path.exists() {
             if !local_path.is_dir() {
-                return Err(PtyError::new(
-                    crate::PtyErrorCode::InvalidArgument,
-                    "ssh mount local_path must be a directory",
-                )
-                .with_details(serde_json::json!({
-                    "local_path": local_path.display().to_string(),
-                })));
+                bail!(
+                    "ssh mount local_path must be a directory: local_path={}",
+                    local_path.display()
+                );
             }
             return Ok(false);
         }
 
         if !create_local_path {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::InvalidArgument,
-                "ssh mount local_path does not exist",
-            )
-            .with_details(serde_json::json!({
-                "local_path": local_path.display().to_string(),
-            })));
+            bail!(
+                "ssh mount local_path does not exist: local_path={}",
+                local_path.display()
+            );
         }
 
-        std::fs::create_dir_all(local_path).map_err(|source| {
-            PtyError::new(
-                crate::PtyErrorCode::SshMountFailed,
-                "failed to create ssh mount local_path",
+        std::fs::create_dir_all(local_path).with_context(|| {
+            format!(
+                "failed to create ssh mount local_path: local_path={}",
+                local_path.display()
             )
-            .with_details(serde_json::json!({
-                "local_path": local_path.display().to_string(),
-                "reason": source.to_string(),
-            }))
         })?;
         Ok(true)
     }
@@ -1567,21 +1484,17 @@ impl AppState {
         &self,
         mount: &SshMountSummary,
         context: &SshMountRuntimeContext,
-    ) -> Result<bool, PtyError> {
+    ) -> Result<bool> {
         if !context.managed_path || !context.created_local_path {
             return Ok(false);
         }
 
-        std::fs::remove_dir(&mount.local_path).map_err(|source| {
-            PtyError::new(
-                crate::PtyErrorCode::SshUnmountFailed,
-                "failed to remove managed ssh mount local_path",
+        std::fs::remove_dir(&mount.local_path).with_context(|| {
+            format!(
+                "failed to remove managed ssh mount local_path: mount_id={} local_path={}",
+                mount.mount_id.as_str(),
+                mount.local_path
             )
-            .with_details(serde_json::json!({
-                "mount_id": mount.mount_id.as_str(),
-                "local_path": mount.local_path,
-                "reason": source.to_string(),
-            }))
         })?;
 
         Ok(true)
@@ -1593,33 +1506,27 @@ impl AppState {
         script: &str,
         error_message: Option<&str>,
         path: Option<&str>,
-    ) -> Result<Output, PtyError> {
+    ) -> Result<Output> {
         let connection = self
             .ssh_registry
             .get_connection(connection_id)
             .ok_or_else(|| {
-                PtyError::new(
-                    crate::PtyErrorCode::SshConnectionNotFound,
-                    "ssh connection not found",
+                anyhow!(
+                    "ssh connection not found: connection_id={}",
+                    connection_id.as_str()
                 )
-                .with_details(serde_json::json!({
-                    "connection_id": connection_id.as_str(),
-                }))
             })?;
 
         if !matches!(
             connection.status,
             SshConnectionStatus::Ready | SshConnectionStatus::Degraded
         ) {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::SshConnectionNotReady,
+            bail!(
+                "{}: connection_id={} status={:?} path={path:?}",
                 error_message.unwrap_or("ssh connection is not ready"),
-            )
-            .with_details(serde_json::json!({
-                "connection_id": connection_id.as_str(),
-                "status": connection.status,
-                "path": path,
-            })));
+                connection_id.as_str(),
+                connection.status
+            );
         }
 
         let context = self.runtime_context_for_connection(&connection);
@@ -1627,12 +1534,7 @@ impl AppState {
             .ssh_config
             .resolved_ssh_bin_path()
             .or_else(|| self.ssh_capabilities.ssh.path.as_ref().map(PathBuf::from))
-            .ok_or_else(|| {
-                PtyError::new(
-                    crate::PtyErrorCode::SshCapabilityUnavailable,
-                    "ssh binary path could not be resolved",
-                )
-            })?;
+            .ok_or_else(|| anyhow!("ssh binary path could not be resolved"))?;
 
         self.ssh_runtime
             .exec_capture(
@@ -1676,7 +1578,7 @@ fn is_valid_remote_cwd(cwd: &str) -> bool {
 
 fn normalize_remote_env_preview(
     env: Option<&Map<String, Value>>,
-) -> Result<BTreeMap<String, String>, PtyError> {
+) -> Result<BTreeMap<String, String>> {
     let mut normalized = BTreeMap::new();
     let Some(env) = env else {
         return Ok(normalized);
@@ -1685,10 +1587,7 @@ fn normalize_remote_env_preview(
     for (key, value) in env {
         let key = key.trim();
         if key.is_empty() {
-            return Err(PtyError::new(
-                crate::PtyErrorCode::InvalidArgument,
-                "remote env key cannot be empty",
-            ));
+            bail!("remote env key cannot be empty");
         }
 
         let value = match value {
@@ -1696,16 +1595,10 @@ fn normalize_remote_env_preview(
             Value::Number(value) => value.to_string(),
             Value::Bool(value) => value.to_string(),
             Value::Null => {
-                return Err(PtyError::new(
-                    crate::PtyErrorCode::InvalidArgument,
-                    "remote env value cannot be null",
-                ));
+                bail!("remote env value cannot be null: env_key={key}");
             }
             Value::Array(_) | Value::Object(_) => {
-                return Err(PtyError::new(
-                    crate::PtyErrorCode::InvalidArgument,
-                    "remote env value must be a scalar",
-                ));
+                bail!("remote env value must be a scalar: env_key={key}");
             }
         };
 
@@ -1713,6 +1606,22 @@ fn normalize_remote_env_preview(
     }
 
     Ok(normalized)
+}
+
+fn map_policy_error(error: anyhow::Error) -> anyhow::Error {
+    error
+}
+
+fn map_registry_error(error: anyhow::Error) -> anyhow::Error {
+    error
+}
+
+fn map_runtime_error(error: anyhow::Error) -> anyhow::Error {
+    error
+}
+
+fn map_ssh_runtime_error(error: anyhow::Error) -> anyhow::Error {
+    error
 }
 
 fn is_active_mount_status(status: &crate::ssh::SshMountStatus) -> bool {
@@ -1724,195 +1633,60 @@ fn is_active_mount_status(status: &crate::ssh::SshMountStatus) -> bool {
     )
 }
 
-fn map_policy_error(error: anyhow::Error) -> PtyError {
-    let message = error.to_string();
-    let is_permission_denied = [
-        "blocked by permission policy",
-        "not within allowed roots",
-        "denied by policy",
-        "not in the allowlist",
-        "required by policy",
-        "outside the allowed policy range",
-        "blocked by ssh policy",
-        "not allowed by ssh policy",
-        "outside allowed managed/controlled roots",
-        "outside allowed roots",
-        "explicit ssh mount paths are disabled by policy",
-        "not allowed by policy",
-    ]
-    .iter()
-    .any(|needle| message.contains(needle));
-
-    let error_code = if is_permission_denied {
-        crate::PtyErrorCode::PermissionDenied
-    } else {
-        crate::PtyErrorCode::InvalidArgument
-    };
-
-    PtyError::new(error_code, message)
-}
-
-fn map_registry_error(error: anyhow::Error) -> PtyError {
-    let message = error.to_string();
-    let error_code = if message.contains("session not found") {
-        crate::PtyErrorCode::SessionNotFound
-    } else if message.contains("session is not running") {
-        crate::PtyErrorCode::SessionNotRunning
-    } else if message.contains("session limit reached") {
-        crate::PtyErrorCode::SpawnFailed
-    } else if message.contains("did not exit before cleanup deadline") {
-        crate::PtyErrorCode::Timeout
-    } else if message.contains("ssh connection not found") {
-        crate::PtyErrorCode::SshConnectionNotFound
-    } else if message.contains("active sessions") {
-        crate::PtyErrorCode::SshActiveSessionExists
-    } else if message.contains("active mounts") {
-        crate::PtyErrorCode::SshActiveMountExists
-    } else if message.contains("invalid regex pattern for buffer read") {
-        crate::PtyErrorCode::InvalidRegex
-    } else {
-        crate::PtyErrorCode::InvalidArgument
-    };
-
-    PtyError::new(error_code, message)
-}
-
-fn map_runtime_error(error: anyhow::Error) -> PtyError {
-    let message = error.to_string();
-    let error_code = if message.contains("invalid hex escape")
-        || message.contains("dangling escape sequence")
-        || message.contains("unsupported escape sequence")
-    {
-        crate::PtyErrorCode::InvalidArgument
-    } else if message.contains("no longer running") {
-        crate::PtyErrorCode::SessionNotRunning
-    } else if message.contains("timed out") {
-        crate::PtyErrorCode::Timeout
-    } else if message.contains("write")
-        || message.contains("flush")
-        || message.contains("terminate PTY process")
-        || message.contains("signal")
-    {
-        crate::PtyErrorCode::WriteFailed
-    } else if message.contains("reader") || message.contains("waiting for PTY child") {
-        crate::PtyErrorCode::ReadFailed
-    } else {
-        crate::PtyErrorCode::SpawnFailed
-    };
-
-    PtyError::new(error_code, message)
-}
-
-fn map_ssh_runtime_error(error: anyhow::Error) -> PtyError {
-    let message = error.to_string();
-    let lower = message.to_ascii_lowercase();
-    let error_code = if lower.contains("capability is unavailable")
-        || lower.contains("binary path is not configured")
-        || lower.contains("does not exist at")
-        || lower.contains("no unmount binary is available")
-    {
-        crate::PtyErrorCode::SshCapabilityUnavailable
-    } else if lower.contains("permission denied") || lower.contains("authentication failed") {
-        crate::PtyErrorCode::SshAuthFailed
-    } else if lower.contains("host key verification failed")
-        || lower.contains("remote host identification has changed")
-    {
-        crate::PtyErrorCode::SshHostKeyRejected
-    } else if lower.contains("no route to host")
-        || lower.contains("connection refused")
-        || lower.contains("connection timed out")
-        || lower.contains("operation timed out")
-        || lower.contains("could not resolve hostname")
-        || lower.contains("name or service not known")
-        || lower.contains("temporary failure in name resolution")
-    {
-        crate::PtyErrorCode::SshHostUnreachable
-    } else if lower.contains("ssh mount failed") {
-        crate::PtyErrorCode::SshMountFailed
-    } else if lower.contains("ssh unmount failed") || lower.contains("diskutil unmount") {
-        crate::PtyErrorCode::SshUnmountFailed
-    } else if lower.contains("ssh verification timed out")
-        || lower.contains("ssh connection verification failed")
-        || lower.contains("ssh command timed out")
-    {
-        crate::PtyErrorCode::SshConnectionNotReady
-    } else if lower.contains("remote script cannot be empty")
-        || lower.contains("remote env key")
-    {
-        crate::PtyErrorCode::InvalidArgument
-    } else {
-        crate::PtyErrorCode::SshConnectionNotReady
-    };
-
-    PtyError::new(error_code, message)
-}
-
-fn validate_remote_path<'a>(path: &'a str, field: &str) -> Result<&'a str, PtyError> {
+fn validate_remote_path<'a>(path: &'a str, field: &str) -> Result<&'a str> {
     let path = path.trim();
-    if path.is_empty() {
-        return Err(PtyError::new(
-            crate::PtyErrorCode::InvalidArgument,
-            format!("{field} cannot be empty"),
-        ));
-    }
-    if path.contains('\0') {
-        return Err(PtyError::new(
-            crate::PtyErrorCode::InvalidArgument,
-            format!("{field} cannot contain NUL bytes"),
-        ));
-    }
+    ensure!(!path.is_empty(), "{field} cannot be empty");
+    ensure!(!path.contains('\0'), "{field} cannot contain NUL bytes");
     Ok(path)
 }
 
-fn validate_remote_max_bytes(max_bytes: usize) -> Result<usize, PtyError> {
-    if max_bytes == 0 {
-        return Err(PtyError::new(
-            crate::PtyErrorCode::InvalidArgument,
-            "ssh_read_file max_bytes must be greater than zero",
-        ));
-    }
-    if max_bytes > 512 * 1024 {
-        return Err(PtyError::new(
-            crate::PtyErrorCode::InvalidArgument,
-            "ssh_read_file max_bytes must be at most 524288",
-        ));
-    }
+fn validate_remote_max_bytes(max_bytes: usize) -> Result<usize> {
+    ensure!(
+        max_bytes > 0,
+        "ssh_read_file max_bytes must be greater than zero"
+    );
+    ensure!(
+        max_bytes <= 512 * 1024,
+        "ssh_read_file max_bytes must be at most 524288"
+    );
     Ok(max_bytes)
 }
 
-fn validate_remote_write_size(content: &str) -> Result<(), PtyError> {
-    if content.len() > 256 * 1024 {
-        return Err(PtyError::new(
-            crate::PtyErrorCode::InvalidArgument,
-            "ssh_write_file content must be at most 262144 bytes",
-        ));
-    }
+fn validate_remote_write_size(content: &str) -> Result<()> {
+    ensure!(
+        content.len() <= 256 * 1024,
+        "ssh_write_file content must be at most 262144 bytes"
+    );
     Ok(())
 }
 
 fn parse_file_too_large_marker(stderr: &str) -> Option<usize> {
     stderr.lines().find_map(|line| {
-        line.find("__PTY_MCP_FILE_TOO_LARGE__:")
-            .and_then(|offset| line[offset + "__PTY_MCP_FILE_TOO_LARGE__:".len()..].trim().parse().ok())
+        line.find("__PTY_MCP_FILE_TOO_LARGE__:").and_then(|offset| {
+            line[offset + "__PTY_MCP_FILE_TOO_LARGE__:".len()..]
+                .trim()
+                .parse()
+                .ok()
+        })
     })
 }
 
 fn remote_command_failed(
-    error_code: crate::PtyErrorCode,
     message: &str,
     connection_id: &SshConnectionId,
     path: Option<&str>,
     output: Output,
-) -> PtyError {
+) -> anyhow::Error {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    PtyError::new(error_code, message).with_details(serde_json::json!({
-        "connection_id": connection_id.as_str(),
-        "path": path,
-        "exit_code": output.status.code(),
-        "stderr_preview": stderr_preview(&stderr),
-        "stdout_preview": stderr_preview(&stdout),
-    }))
+    anyhow!(
+        "{message}: connection_id={} path={:?} exit_code={:?} stderr_preview={} stdout_preview={}",
+        connection_id.as_str(),
+        path,
+        output.status.code(),
+        stderr_preview(&stderr),
+        stderr_preview(&stdout)
+    )
 }
 
 fn stderr_preview(output: &str) -> String {

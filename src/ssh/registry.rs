@@ -393,10 +393,7 @@ impl SshRegistry {
         })
     }
 
-    pub fn ensure_disconnect_allowed(
-        &self,
-        connection_id: &SshConnectionId,
-    ) -> Result<()> {
+    pub fn ensure_disconnect_allowed(&self, connection_id: &SshConnectionId) -> Result<()> {
         let counts = self
             .active_resource_counts(connection_id)
             .ok_or_else(|| ssh_connection_not_found(connection_id))?;

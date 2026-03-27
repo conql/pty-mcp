@@ -265,9 +265,8 @@ fn parse_auth_kinds(key: &'static str, value: &str) -> Result<Vec<String>> {
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
     {
-        let normalized = normalize_auth_kind(segment).ok_or_else(|| {
-            anyhow::anyhow!("invalid ssh auth kind for {key}: value={segment}")
-        })?;
+        let normalized = normalize_auth_kind(segment)
+            .ok_or_else(|| anyhow::anyhow!("invalid ssh auth kind for {key}: value={segment}"))?;
         if !parsed.contains(&normalized) {
             parsed.push(normalized);
         }
@@ -399,8 +398,8 @@ mod tests {
 
     #[test]
     fn parse_bool_error_contains_key_and_value() {
-        let error =
-            parse_bool("PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS", "maybe").expect_err("parse should fail");
+        let error = parse_bool("PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS", "maybe")
+            .expect_err("parse should fail");
         let text = format!("{error:#}");
         assert!(text.contains("PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS"));
         assert!(text.contains("maybe"));

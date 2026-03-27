@@ -89,10 +89,7 @@ pub struct SshSessionSpawnPlan {
 pub struct SshRuntime;
 
 impl SshRuntime {
-    pub async fn verify_connection(
-        &self,
-        request: SshConnectVerificationRequest,
-    ) -> Result<()> {
+    pub async fn verify_connection(&self, request: SshConnectVerificationRequest) -> Result<()> {
         let SshConnectVerificationRequest {
             ssh_bin_path,
             target,
@@ -184,10 +181,7 @@ impl SshRuntime {
         ))
     }
 
-    pub fn build_exec_plan(
-        &self,
-        request: SshExecPlanRequest,
-    ) -> Result<SshSessionSpawnPlan> {
+    pub fn build_exec_plan(&self, request: SshExecPlanRequest) -> Result<SshSessionSpawnPlan> {
         let ssh_bin_path = ensure_ssh_binary(request.ssh_bin_path)?;
         let remote_command = build_remote_exec_command(
             &request.script,
@@ -289,11 +283,7 @@ impl SshRuntime {
         ))
     }
 
-    pub async fn disconnect(
-        &self,
-        _connection: &SshConnectionSummary,
-        _force: bool,
-    ) -> Result<()> {
+    pub async fn disconnect(&self, _connection: &SshConnectionSummary, _force: bool) -> Result<()> {
         Ok(())
     }
 
