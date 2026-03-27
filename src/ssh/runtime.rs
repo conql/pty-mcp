@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{PtyError, PtyErrorCode};
+use anyhow::{Result, anyhow, bail};
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     process::Command,
@@ -92,7 +92,7 @@ impl SshRuntime {
     pub async fn verify_connection(
         &self,
         request: SshConnectVerificationRequest,
-    ) -> Result<(), PtyError> {
+    ) -> Result<()> {
         let SshConnectVerificationRequest {
             ssh_bin_path,
             target,
@@ -128,7 +128,7 @@ impl SshRuntime {
         Err(map_ssh_failure(&target, output))
     }
 
-    pub async fn mount(&self, request: SshMountPlanRequest) -> Result<(), PtyError> {
+    pub async fn mount(&self, request: SshMountPlanRequest) -> Result<()> {
         let sshfs_bin_path = request
             .sshfs_bin_path
             .clone()
@@ -145,7 +145,6 @@ impl SshRuntime {
             sshfs_bin_path.clone(),
             args,
             DEFAULT_MOUNT_TIMEOUT,
-            PtyErrorCode::SshMountFailed,
             "ssh mount command timed out",
             "ssh mount task failed",
             "failed to execute ssh mount command",
@@ -162,7 +161,7 @@ impl SshRuntime {
     pub fn build_session_spawn_plan(
         &self,
         request: SshSessionSpawnPlanRequest,
-    ) -> Result<SshSessionSpawnPlan, PtyError> {
+    ) -> Result<SshSessionSpawnPlan> {
         let ssh_bin_path = ensure_ssh_binary(request.ssh_bin_path)?;
 
         let remote_command = build_remote_command(
@@ -188,7 +187,7 @@ impl SshRuntime {
     pub fn build_exec_plan(
         &self,
         request: SshExecPlanRequest,
-    ) -> Result<SshSessionSpawnPlan, PtyError> {
+    ) -> Result<SshSessionSpawnPlan> {
         let ssh_bin_path = ensure_ssh_binary(request.ssh_bin_path)?;
         let remote_command = build_remote_exec_command(
             &request.script,
@@ -213,7 +212,7 @@ impl SshRuntime {
         &self,
         request: SshExecPlanRequest,
         timeout: Option<Duration>,
-    ) -> Result<Output, PtyError> {
+    ) -> Result<Output> {
         let ssh_bin_path = ensure_ssh_binary(request.ssh_bin_path)?;
         let remote_command = build_remote_exec_command(
             &request.script,
@@ -236,7 +235,6 @@ impl SshRuntime {
             ssh_bin_path,
             plan.args,
             timeout.unwrap_or(DEFAULT_CAPTURE_TIMEOUT),
-            PtyErrorCode::SshConnectionNotReady,
             "ssh command timed out",
             "ssh command task failed",
             "failed to execute ssh command",
@@ -244,7 +242,7 @@ impl SshRuntime {
         .await
     }
 
-    pub async fn unmount(&self, request: SshUnmountRequest) -> Result<(), PtyError> {
+    pub async fn unmount(&self, request: SshUnmountRequest) -> Result<()> {
         let mountpoint = PathBuf::from(&request.mount.local_path);
 
         if let Some(umount_bin_path) = request.umount_bin_path.as_ref() {
@@ -265,7 +263,6 @@ impl SshRuntime {
                 umount_bin_path.clone(),
                 args,
                 DEFAULT_UNMOUNT_TIMEOUT,
-                PtyErrorCode::SshUnmountFailed,
                 "ssh unmount command timed out",
                 "ssh unmount task failed",
                 "failed to execute ssh unmount command",
@@ -296,15 +293,15 @@ impl SshRuntime {
         &self,
         _connection: &SshConnectionSummary,
         _force: bool,
-    ) -> Result<(), PtyError> {
+    ) -> Result<()> {
         Ok(())
     }
 
-    pub async fn cleanup_on_shutdown(&self, _mounts: &[SshMountSummary]) -> Result<(), PtyError> {
+    pub async fn cleanup_on_shutdown(&self, _mounts: &[SshMountSummary]) -> Result<()> {
         Ok(())
     }
 
-    async fn run_diskutil_unmount(&self, request: &SshUnmountRequest) -> Result<(), PtyError> {
+    async fn run_diskutil_unmount(&self, request: &SshUnmountRequest) -> Result<()> {
         let diskutil_bin_path = request
             .diskutil_bin_path
             .as_ref()
@@ -326,7 +323,6 @@ impl SshRuntime {
             diskutil_bin_path.clone(),
             args,
             DEFAULT_UNMOUNT_TIMEOUT,
-            PtyErrorCode::SshUnmountFailed,
             "diskutil unmount command timed out",
             "diskutil unmount task failed",
             "failed to execute diskutil unmount command",
@@ -348,7 +344,7 @@ fn build_remote_command(
     env: &BTreeMap<String, String>,
     shell: Option<&str>,
     login: bool,
-) -> Result<Option<String>, PtyError> {
+) -> Result<Option<String>> {
     let command = command.map(str::trim).filter(|value| !value.is_empty());
     let cwd = cwd.map(str::trim).filter(|value| !value.is_empty());
     let shell = shell.map(str::trim).filter(|value| !value.is_empty());
@@ -362,17 +358,10 @@ fn build_remote_command(
     for (key, value) in env {
         let key = key.trim();
         if key.is_empty() {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "remote env key cannot be empty",
-            ));
+            bail!("remote env key cannot be empty");
         }
         if !is_valid_env_key(key) {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "remote env key must be a valid shell identifier",
-            )
-            .with_details(serde_json::json!({ "env_key": key })));
+            bail!("remote env key must be a valid shell identifier: env_key={key}");
         }
         script_parts.push(format!("export {key}={}", shell_escape(value)));
     }
@@ -410,32 +399,22 @@ fn build_remote_exec_command(
     env: &BTreeMap<String, String>,
     shell: Option<&str>,
     login: bool,
-) -> Result<String, PtyError> {
+) -> Result<String> {
     let cwd = cwd.map(str::trim).filter(|value| !value.is_empty());
     let shell = shell.map(str::trim).filter(|value| !value.is_empty());
     let script = script.trim();
     if script.is_empty() {
-        return Err(PtyError::new(
-            PtyErrorCode::InvalidArgument,
-            "remote script cannot be empty",
-        ));
+        bail!("remote script cannot be empty");
     }
 
     let mut script_parts = Vec::new();
     for (key, value) in env {
         let key = key.trim();
         if key.is_empty() {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "remote env key cannot be empty",
-            ));
+            bail!("remote env key cannot be empty");
         }
         if !is_valid_env_key(key) {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "remote env key must be a valid shell identifier",
-            )
-            .with_details(serde_json::json!({ "env_key": key })));
+            bail!("remote env key must be a valid shell identifier: env_key={key}");
         }
         script_parts.push(format!("export {key}={}", shell_escape(value)));
     }
@@ -461,7 +440,7 @@ fn build_remote_exec_command(
     ))
 }
 
-fn ensure_ssh_binary(ssh_bin_path: Option<PathBuf>) -> Result<PathBuf, PtyError> {
+fn ensure_ssh_binary(ssh_bin_path: Option<PathBuf>) -> Result<PathBuf> {
     let ssh_bin_path =
         ssh_bin_path.ok_or_else(|| capability_unavailable("ssh binary path is not configured"))?;
     if !ssh_bin_path.is_file() {
@@ -722,12 +701,11 @@ async fn run_verify_command(
     ssh_bin_path: PathBuf,
     args: Vec<String>,
     connect_timeout: Duration,
-) -> Result<Output, PtyError> {
+) -> Result<Output> {
     run_command(
         ssh_bin_path,
         args,
         connect_timeout + Duration::from_secs(2),
-        PtyErrorCode::SshConnectionNotReady,
         "ssh verification timed out",
         "ssh verification task failed",
         "failed to execute ssh verification command",
@@ -735,89 +713,44 @@ async fn run_verify_command(
     .await
 }
 
-fn map_ssh_failure(target: &SshTarget, output: Output) -> PtyError {
+fn map_ssh_failure(target: &SshTarget, output: Output) -> anyhow::Error {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}\n{stderr}");
-    let normalized = combined.to_ascii_lowercase();
-
-    let code = if normalized.contains("permission denied")
-        || normalized.contains("authentication failed")
-    {
-        PtyErrorCode::SshAuthFailed
-    } else if normalized.contains("host key verification failed")
-        || normalized.contains("remote host identification has changed")
-    {
-        PtyErrorCode::SshHostKeyRejected
-    } else if normalized.contains("no route to host")
-        || normalized.contains("connection refused")
-        || normalized.contains("connection timed out")
-        || normalized.contains("operation timed out")
-        || normalized.contains("could not resolve hostname")
-        || normalized.contains("name or service not known")
-        || normalized.contains("temporary failure in name resolution")
-    {
-        PtyErrorCode::SshHostUnreachable
-    } else {
-        PtyErrorCode::SshConnectionNotReady
-    };
-
-    PtyError::new(code, "ssh connection verification failed").with_details(serde_json::json!({
-        "target": target.summary(),
-        "exit_code": output.status.code(),
-        "stderr_preview": stderr_preview(&combined),
-    }))
+    anyhow!(
+        "ssh connection verification failed: target={} exit_code={:?} stderr_preview={}",
+        target.summary(),
+        output.status.code(),
+        stderr_preview(&combined)
+    )
 }
 
-fn map_mount_failure(request: &SshMountPlanRequest, output: Output) -> PtyError {
+fn map_mount_failure(request: &SshMountPlanRequest, output: Output) -> anyhow::Error {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}\n{stderr}");
-    let normalized = combined.to_ascii_lowercase();
-
-    let code = if normalized.contains("permission denied")
-        || normalized.contains("authentication failed")
-    {
-        PtyErrorCode::SshAuthFailed
-    } else if normalized.contains("host key verification failed")
-        || normalized.contains("remote host identification has changed")
-    {
-        PtyErrorCode::SshHostKeyRejected
-    } else if normalized.contains("no route to host")
-        || normalized.contains("connection refused")
-        || normalized.contains("connection timed out")
-        || normalized.contains("operation timed out")
-        || normalized.contains("could not resolve hostname")
-        || normalized.contains("name or service not known")
-        || normalized.contains("temporary failure in name resolution")
-    {
-        PtyErrorCode::SshHostUnreachable
-    } else {
-        PtyErrorCode::SshMountFailed
-    };
-
-    PtyError::new(code, "ssh mount failed").with_details(serde_json::json!({
-        "mount_id": request.mount.mount_id.as_str(),
-        "target": request.connection.target_summary,
-        "remote_path": request.mount.remote_path,
-        "local_path": request.mount.local_path,
-        "exit_code": output.status.code(),
-        "stderr_preview": stderr_preview(&combined),
-    }))
+    anyhow!(
+        "ssh mount failed: mount_id={} target={} remote_path={} local_path={} exit_code={:?} stderr_preview={}",
+        request.mount.mount_id.as_str(),
+        request.connection.target_summary,
+        request.mount.remote_path,
+        request.mount.local_path,
+        output.status.code(),
+        stderr_preview(&combined)
+    )
 }
 
-fn map_unmount_failure(mount: &SshMountSummary, output: Output) -> PtyError {
+fn map_unmount_failure(mount: &SshMountSummary, output: Output) -> anyhow::Error {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}\n{stderr}");
 
-    PtyError::new(PtyErrorCode::SshUnmountFailed, "ssh unmount failed").with_details(
-        serde_json::json!({
-            "mount_id": mount.mount_id.as_str(),
-            "local_path": mount.local_path,
-            "exit_code": output.status.code(),
-            "stderr_preview": stderr_preview(&combined),
-        }),
+    anyhow!(
+        "ssh unmount failed: mount_id={} local_path={} exit_code={:?} stderr_preview={}",
+        mount.mount_id.as_str(),
+        mount.local_path,
+        output.status.code(),
+        stderr_preview(&combined)
     )
 }
 
@@ -832,11 +765,10 @@ async fn run_command(
     program: PathBuf,
     args: Vec<String>,
     timeout: Duration,
-    join_error_code: PtyErrorCode,
     timeout_message: &str,
     join_message: &str,
     execution_message: &str,
-) -> Result<Output, PtyError> {
+) -> Result<Output> {
     let mut child = Command::new(&program)
         .args(args)
         .stdin(Stdio::null())
@@ -848,8 +780,7 @@ async fn run_command(
             if message.contains("No such file or directory") {
                 capability_unavailable(message)
             } else {
-                PtyError::new(join_error_code, execution_message)
-                    .with_details(serde_json::json!({ "reason": message }))
+                anyhow!("{execution_message}: {message}")
             }
         })?;
 
@@ -857,35 +788,19 @@ async fn run_command(
     let stderr_task = spawn_capture_task(child.stderr.take());
 
     let status = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(result) => result.map_err(|source| {
-            PtyError::new(join_error_code, execution_message)
-                .with_details(serde_json::json!({ "reason": source.to_string() }))
-        })?,
+        Ok(result) => result.map_err(|source| anyhow!("{execution_message}: {source}"))?,
         Err(_) => {
             let _ = child.start_kill();
-            let status = child.wait().await.map_err(|source| {
-                PtyError::new(join_error_code, format!("{join_message}: {source}"))
-            })?;
-            let output = collect_output(
-                status,
-                stdout_task,
-                stderr_task,
-                join_error_code,
-                join_message,
-            )
-            .await?;
-            return Err(timeout_error(join_error_code, timeout_message, &output));
+            let status = child
+                .wait()
+                .await
+                .map_err(|source| anyhow!("{join_message}: {source}"))?;
+            let output = collect_output(status, stdout_task, stderr_task, join_message).await?;
+            return Err(timeout_error(timeout_message, &output));
         }
     };
 
-    collect_output(
-        status,
-        stdout_task,
-        stderr_task,
-        join_error_code,
-        join_message,
-    )
-    .await
+    collect_output(status, stdout_task, stderr_task, join_message).await
 }
 
 fn stderr_preview(output: &str) -> String {
@@ -896,12 +811,8 @@ fn stderr_preview(output: &str) -> String {
     trimmed.chars().take(512).collect()
 }
 
-fn capability_unavailable(message: impl Into<String>) -> PtyError {
-    PtyError::new(
-        PtyErrorCode::SshCapabilityUnavailable,
-        "required ssh capability is unavailable",
-    )
-    .with_details(serde_json::json!({ "reason": message.into() }))
+fn capability_unavailable(message: impl Into<String>) -> anyhow::Error {
+    anyhow!("required ssh capability is unavailable: {}", message.into())
 }
 
 fn spawn_capture_task<R>(reader: Option<R>) -> JoinHandle<Result<Vec<u8>, std::io::Error>>
@@ -923,11 +834,10 @@ async fn collect_output(
     status: std::process::ExitStatus,
     stdout_task: JoinHandle<Result<Vec<u8>, std::io::Error>>,
     stderr_task: JoinHandle<Result<Vec<u8>, std::io::Error>>,
-    join_error_code: PtyErrorCode,
     join_message: &str,
-) -> Result<Output, PtyError> {
-    let stdout = join_capture_task(stdout_task, join_error_code, join_message, "stdout").await?;
-    let stderr = join_capture_task(stderr_task, join_error_code, join_message, "stderr").await?;
+) -> Result<Output> {
+    let stdout = join_capture_task(stdout_task, join_message, "stdout").await?;
+    let stderr = join_capture_task(stderr_task, join_message, "stderr").await?;
     Ok(Output {
         status,
         stdout,
@@ -937,32 +847,24 @@ async fn collect_output(
 
 async fn join_capture_task(
     task: JoinHandle<Result<Vec<u8>, std::io::Error>>,
-    join_error_code: PtyErrorCode,
     join_message: &str,
     stream_name: &str,
-) -> Result<Vec<u8>, PtyError> {
+) -> Result<Vec<u8>> {
     let captured = task.await.map_err(|join_error| {
-        PtyError::new(
-            join_error_code,
-            format!("{join_message}: failed to join {stream_name} capture task: {join_error}"),
-        )
+        anyhow!("{join_message}: failed to join {stream_name} capture task: {join_error}")
     })?;
 
-    captured.map_err(|source| {
-        PtyError::new(
-            join_error_code,
-            format!("{join_message}: failed to read {stream_name}: {source}"),
-        )
-    })
+    captured.map_err(|source| anyhow!("{join_message}: failed to read {stream_name}: {source}"))
 }
 
-fn timeout_error(error_code: PtyErrorCode, message: &str, output: &Output) -> PtyError {
+fn timeout_error(message: &str, output: &Output) -> anyhow::Error {
     let combined = String::from_utf8_lossy(&output.stdout).to_string()
         + "\n"
         + &String::from_utf8_lossy(&output.stderr);
 
-    PtyError::new(error_code, message).with_details(serde_json::json!({
-        "exit_code": output.status.code(),
-        "stderr_preview": stderr_preview(&combined),
-    }))
+    anyhow!(
+        "{message}: exit_code={:?} stderr_preview={}",
+        output.status.code(),
+        stderr_preview(&combined)
+    )
 }

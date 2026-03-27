@@ -5,7 +5,6 @@ use std::{
 };
 
 use pty_mcp::{
-    PtyErrorCode,
     ssh::{SshAuthKind, SshRuntime, SshTarget, runtime::SshConnectVerificationRequest},
 };
 
@@ -78,14 +77,8 @@ async fn verify_connection_timeout_preserves_stderr_preview() -> anyhow::Result<
         .await
         .expect_err("verification should time out");
 
-    assert_eq!(error.error_code, PtyErrorCode::SshConnectionNotReady);
-    assert_eq!(error.message, "ssh verification timed out");
-    let details = error
-        .details
-        .expect("timeout should include structured details");
-    assert_eq!(
-        details["stderr_preview"].as_str(),
-        Some("waiting for remote auth")
-    );
+    let text = format!("{error:#}");
+    assert!(text.contains("ssh verification timed out"));
+    assert!(text.contains("waiting for remote auth"));
     Ok(())
 }

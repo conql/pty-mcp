@@ -241,7 +241,9 @@ async fn ssh_mount_failures_are_recorded_on_mount_summary() -> anyhow::Result<()
     let mounts = app.ssh_list_mounts();
     assert_eq!(mounts.len(), 1);
     assert_eq!(mounts[0].status, SshMountStatus::Failed);
-    assert_eq!(mounts[0].last_error.as_deref(), Some("ssh mount failed"));
+    let last_error = mounts[0].last_error.as_deref().unwrap_or_default();
+    assert!(last_error.contains("ssh mount failed"));
+    assert!(last_error.contains("failing-mount"));
     Ok(())
 }
 

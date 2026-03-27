@@ -362,7 +362,8 @@ impl AppState {
                 verify_host_key: request.verify_host_key,
                 connect_timeout: None,
             })
-            .await?;
+            .await
+            .map_err(map_ssh_runtime_error)?;
 
         let status =
             if self.ssh_capabilities.sshfs.available && self.ssh_capabilities.unmount.available {
@@ -616,9 +617,9 @@ impl AppState {
             Err(error) => {
                 let mut failed = mount;
                 failed.status = crate::ssh::SshMountStatus::Failed;
-                failed.last_error = Some(error.message.clone());
+                failed.last_error = Some(error.to_string());
                 self.ssh_registry.upsert_mount(failed);
-                Err(error)
+                Err(map_ssh_runtime_error(error))
             }
         }
     }
@@ -675,9 +676,9 @@ impl AppState {
             Err(error) => {
                 let mut failed = mount;
                 failed.status = crate::ssh::SshMountStatus::Failed;
-                failed.last_error = Some(error.message.clone());
+                failed.last_error = Some(error.to_string());
                 self.ssh_registry.upsert_mount(failed);
-                Err(error)
+                Err(map_ssh_runtime_error(error))
             }
         }
     }
@@ -774,7 +775,8 @@ impl AppState {
                         .unwrap_or(connection.clone()),
                     request.force,
                 )
-                .await?;
+                .await
+                .map_err(map_ssh_runtime_error)?;
 
             let current_status = self
                 .ssh_registry
@@ -877,7 +879,8 @@ impl AppState {
                 shell: request.shell.clone(),
                 interactive: request.interactive,
                 login: request.login,
-            })?;
+            })
+            .map_err(map_ssh_runtime_error)?;
 
         let summary = SessionSummary {
             session_id: SessionId::new(),
@@ -919,7 +922,7 @@ impl AppState {
             }
             Err(error) => {
                 let _ = self.registry.mark_failed_to_spawn(&session_id);
-                return Err(error);
+                return Err(map_runtime_error(error));
             }
         }
 
@@ -1008,7 +1011,8 @@ impl AppState {
                     env: remote_env_preview.clone(),
                     shell: request.shell.clone(),
                     login: request.login,
-                })?;
+                })
+                .map_err(map_ssh_runtime_error)?;
 
         let summary = SessionSummary {
             session_id: SessionId::new(),
@@ -1050,7 +1054,7 @@ impl AppState {
             }
             Err(error) => {
                 let _ = self.registry.mark_failed_to_spawn(&session_id);
-                return Err(error);
+                return Err(map_runtime_error(error));
             }
         }
 
@@ -1310,7 +1314,7 @@ impl AppState {
             }
             Err(error) => {
                 let _ = self.registry.mark_failed_to_spawn(&session_id);
-                return Err(error);
+                return Err(map_runtime_error(error));
             }
         }
 
@@ -1647,6 +1651,7 @@ impl AppState {
                 None,
             )
             .await
+            .map_err(map_ssh_runtime_error)
     }
 }
 
@@ -1767,6 +1772,76 @@ fn map_registry_error(error: anyhow::Error) -> PtyError {
         crate::PtyErrorCode::InvalidRegex
     } else {
         crate::PtyErrorCode::InvalidArgument
+    };
+
+    PtyError::new(error_code, message)
+}
+
+fn map_runtime_error(error: anyhow::Error) -> PtyError {
+    let message = error.to_string();
+    let error_code = if message.contains("invalid hex escape")
+        || message.contains("dangling escape sequence")
+        || message.contains("unsupported escape sequence")
+    {
+        crate::PtyErrorCode::InvalidArgument
+    } else if message.contains("no longer running") {
+        crate::PtyErrorCode::SessionNotRunning
+    } else if message.contains("timed out") {
+        crate::PtyErrorCode::Timeout
+    } else if message.contains("write")
+        || message.contains("flush")
+        || message.contains("terminate PTY process")
+        || message.contains("signal")
+    {
+        crate::PtyErrorCode::WriteFailed
+    } else if message.contains("reader") || message.contains("waiting for PTY child") {
+        crate::PtyErrorCode::ReadFailed
+    } else {
+        crate::PtyErrorCode::SpawnFailed
+    };
+
+    PtyError::new(error_code, message)
+}
+
+fn map_ssh_runtime_error(error: anyhow::Error) -> PtyError {
+    let message = error.to_string();
+    let lower = message.to_ascii_lowercase();
+    let error_code = if lower.contains("capability is unavailable")
+        || lower.contains("binary path is not configured")
+        || lower.contains("does not exist at")
+        || lower.contains("no unmount binary is available")
+    {
+        crate::PtyErrorCode::SshCapabilityUnavailable
+    } else if lower.contains("permission denied") || lower.contains("authentication failed") {
+        crate::PtyErrorCode::SshAuthFailed
+    } else if lower.contains("host key verification failed")
+        || lower.contains("remote host identification has changed")
+    {
+        crate::PtyErrorCode::SshHostKeyRejected
+    } else if lower.contains("no route to host")
+        || lower.contains("connection refused")
+        || lower.contains("connection timed out")
+        || lower.contains("operation timed out")
+        || lower.contains("could not resolve hostname")
+        || lower.contains("name or service not known")
+        || lower.contains("temporary failure in name resolution")
+    {
+        crate::PtyErrorCode::SshHostUnreachable
+    } else if lower.contains("ssh mount failed") {
+        crate::PtyErrorCode::SshMountFailed
+    } else if lower.contains("ssh unmount failed") || lower.contains("diskutil unmount") {
+        crate::PtyErrorCode::SshUnmountFailed
+    } else if lower.contains("ssh verification timed out")
+        || lower.contains("ssh connection verification failed")
+        || lower.contains("ssh command timed out")
+    {
+        crate::PtyErrorCode::SshConnectionNotReady
+    } else if lower.contains("remote script cannot be empty")
+        || lower.contains("remote env key")
+    {
+        crate::PtyErrorCode::InvalidArgument
+    } else {
+        crate::PtyErrorCode::SshConnectionNotReady
     };
 
     PtyError::new(error_code, message)

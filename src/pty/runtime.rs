@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 #[cfg(unix)]
 use nix::{
@@ -15,10 +16,7 @@ use nix::{
 use portable_pty::{Child, ChildKiller, CommandBuilder, PtySize, native_pty_system};
 use tokio::sync::{mpsc, watch};
 
-use crate::{
-    PtyError, PtyErrorCode,
-    session::{ExitInfo, SignalKind},
-};
+use crate::session::{ExitInfo, SignalKind};
 
 const DEFAULT_PTY_ROWS: u16 = 24;
 const DEFAULT_PTY_COLS: u16 = 80;
@@ -111,22 +109,17 @@ struct PtySessionInner {
     pid: Option<u32>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
-    exit_tx: watch::Sender<Option<Result<RuntimeExitStatus, PtyError>>>,
+    exit_tx: watch::Sender<Option<Result<RuntimeExitStatus, String>>>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PtyRuntime;
 
 impl PtyRuntime {
-    pub async fn spawn(&self, request: PtySpawnRequest) -> Result<PtySpawnResult, PtyError> {
+    pub async fn spawn(&self, request: PtySpawnRequest) -> Result<PtySpawnResult> {
         let artifacts = tokio::task::spawn_blocking(move || spawn_blocking(request))
             .await
-            .map_err(|join_error| {
-                PtyError::new(
-                    PtyErrorCode::SpawnFailed,
-                    format!("pty spawn task failed: {join_error}"),
-                )
-            })??;
+            .map_err(|join_error| anyhow!("pty spawn task failed: {join_error}"))??;
 
         let SpawnArtifacts {
             pid,
@@ -139,7 +132,7 @@ impl PtyRuntime {
         let (output_tx, output_rx) = mpsc::channel(DEFAULT_OUTPUT_CHANNEL_CAPACITY);
         std::thread::spawn(move || read_output_loop(reader, output_tx));
 
-        let (exit_tx, _) = watch::channel(None::<Result<RuntimeExitStatus, PtyError>>);
+        let (exit_tx, _) = watch::channel(None::<Result<RuntimeExitStatus, String>>);
         let wait_tx = exit_tx.clone();
         std::thread::spawn(move || wait_for_exit(child, wait_tx));
 
@@ -165,24 +158,20 @@ impl PtySessionHandle {
         self.inner.pid
     }
 
-    pub fn exit_status(&self) -> Option<Result<RuntimeExitStatus, PtyError>> {
+    pub fn exit_status(&self) -> Option<Result<RuntimeExitStatus, String>> {
         self.inner.exit_tx.borrow().clone()
     }
 
-    pub async fn write_plain(&self, data: impl Into<String>) -> Result<usize, PtyError> {
-        self.write_inner(data.into())
-            .await
-            .map_err(|error| error.with_details(serde_json::json!({ "mode": "plain" })))
+    pub async fn write_plain(&self, data: impl Into<String>) -> Result<usize> {
+        self.write_inner(data.into()).await
     }
 
-    pub async fn write_escaped(&self, data: impl AsRef<str>) -> Result<usize, PtyError> {
+    pub async fn write_escaped(&self, data: impl AsRef<str>) -> Result<usize> {
         let decoded = decode_escaped_input(data.as_ref())?;
-        self.write_inner(decoded)
-            .await
-            .map_err(|error| error.with_details(serde_json::json!({ "mode": "escaped" })))
+        self.write_inner(decoded).await
     }
 
-    pub async fn signal(&self, signal: SignalKind) -> Result<(), PtyError> {
+    pub async fn signal(&self, signal: SignalKind) -> Result<()> {
         self.ensure_running()?;
 
         let pid = self.inner.pid;
@@ -190,31 +179,26 @@ impl PtySessionHandle {
 
         tokio::task::spawn_blocking(move || signal_blocking(pid, killer, signal))
             .await
-            .map_err(|join_error| {
-                PtyError::new(
-                    PtyErrorCode::WriteFailed,
-                    format!("signal task failed: {join_error}"),
-                )
-            })?
+            .map_err(|join_error| anyhow!("signal task failed: {join_error}"))?
     }
 
     pub async fn wait(
         &self,
         timeout: Option<Duration>,
-    ) -> Result<Option<RuntimeExitStatus>, PtyError> {
+    ) -> Result<Option<RuntimeExitStatus>> {
         if let Some(result) = self.exit_status() {
-            return result.map(Some);
+            return result.map(Some).map_err(|message| anyhow!(message));
         }
 
         let mut exit_rx = self.inner.exit_tx.subscribe();
         let changed = async {
             loop {
                 exit_rx.changed().await.map_err(|_| {
-                    PtyError::new(PtyErrorCode::ReadFailed, "exit watcher unexpectedly closed")
+                    anyhow!("exit watcher unexpectedly closed")
                 })?;
 
                 if let Some(result) = exit_rx.borrow().clone() {
-                    return result.map(Some);
+                    return result.map(Some).map_err(|message| anyhow!(message));
                 }
             }
         };
@@ -228,44 +212,30 @@ impl PtySessionHandle {
         }
     }
 
-    async fn write_inner(&self, data: String) -> Result<usize, PtyError> {
+    async fn write_inner(&self, data: String) -> Result<usize> {
         self.ensure_running()?;
 
         let bytes = data.into_bytes();
         let byte_count = bytes.len();
         let writer = Arc::clone(&self.inner.writer);
 
-        tokio::task::spawn_blocking(move || -> Result<usize, PtyError> {
+        tokio::task::spawn_blocking(move || -> Result<usize> {
             let mut writer = writer.lock().expect("pty writer mutex poisoned");
-            writer.write_all(&bytes).map_err(|source| {
-                PtyError::new(
-                    PtyErrorCode::WriteFailed,
-                    format!("failed to write to PTY: {source}"),
-                )
-            })?;
-            writer.flush().map_err(|source| {
-                PtyError::new(
-                    PtyErrorCode::WriteFailed,
-                    format!("failed to flush PTY writer: {source}"),
-                )
-            })?;
+            writer
+                .write_all(&bytes)
+                .map_err(|source| anyhow!("failed to write to PTY: {source}"))?;
+            writer
+                .flush()
+                .map_err(|source| anyhow!("failed to flush PTY writer: {source}"))?;
             Ok(byte_count)
         })
         .await
-        .map_err(|join_error| {
-            PtyError::new(
-                PtyErrorCode::WriteFailed,
-                format!("write task failed: {join_error}"),
-            )
-        })?
+        .map_err(|join_error| anyhow!("write task failed: {join_error}"))?
     }
 
-    fn ensure_running(&self) -> Result<(), PtyError> {
+    fn ensure_running(&self) -> Result<()> {
         if self.exit_status().is_some() {
-            return Err(PtyError::new(
-                PtyErrorCode::SessionNotRunning,
-                "PTY session is no longer running",
-            ));
+            bail!("PTY session is no longer running");
         }
 
         Ok(())
@@ -298,7 +268,7 @@ impl std::fmt::Debug for PtySessionHandle {
     }
 }
 
-fn spawn_blocking(request: PtySpawnRequest) -> Result<SpawnArtifacts, PtyError> {
+fn spawn_blocking(request: PtySpawnRequest) -> Result<SpawnArtifacts> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -307,12 +277,7 @@ fn spawn_blocking(request: PtySpawnRequest) -> Result<SpawnArtifacts, PtyError> 
             pixel_width: 0,
             pixel_height: 0,
         })
-        .map_err(|source| {
-            PtyError::new(
-                PtyErrorCode::SpawnFailed,
-                format!("failed to open PTY pair: {source}"),
-            )
-        })?;
+        .map_err(|source| anyhow!("failed to open PTY pair: {source}"))?;
 
     let mut command = CommandBuilder::new(&request.command);
     command.args(&request.args);
@@ -325,31 +290,22 @@ fn spawn_blocking(request: PtySpawnRequest) -> Result<SpawnArtifacts, PtyError> 
         command.env(key, value);
     }
 
-    let child = pair.slave.spawn_command(command).map_err(|source| {
-        PtyError::new(
-            PtyErrorCode::SpawnFailed,
-            format!(
-                "failed to spawn PTY command '{}': {source}",
-                request.command
-            ),
-        )
-    })?;
+    let child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|source| anyhow!("failed to spawn PTY command '{}': {source}", request.command))?;
 
     drop(pair.slave);
 
-    let reader = pair.master.try_clone_reader().map_err(|source| {
-        PtyError::new(
-            PtyErrorCode::ReadFailed,
-            format!("failed to clone PTY reader: {source}"),
-        )
-    })?;
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|source| anyhow!("failed to clone PTY reader: {source}"))?;
 
-    let writer = pair.master.take_writer().map_err(|source| {
-        PtyError::new(
-            PtyErrorCode::WriteFailed,
-            format!("failed to acquire PTY writer: {source}"),
-        )
-    })?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|source| anyhow!("failed to acquire PTY writer: {source}"))?;
 
     let pid = child.process_id();
     let killer = child.clone_killer();
@@ -383,17 +339,12 @@ fn read_output_loop(mut reader: Box<dyn Read + Send>, output_tx: mpsc::Sender<Ve
 
 fn wait_for_exit(
     mut child: Box<dyn Child + Send + Sync>,
-    exit_tx: watch::Sender<Option<Result<RuntimeExitStatus, PtyError>>>,
+    exit_tx: watch::Sender<Option<Result<RuntimeExitStatus, String>>>,
 ) {
     let result = child
         .wait()
         .map(RuntimeExitStatus::from_exit)
-        .map_err(|source| {
-            PtyError::new(
-                PtyErrorCode::ReadFailed,
-                format!("failed while waiting for PTY child: {source}"),
-            )
-        });
+        .map_err(|source| format!("failed while waiting for PTY child: {source}"));
     let _ = exit_tx.send(Some(result));
 }
 
@@ -401,7 +352,7 @@ fn signal_blocking(
     pid: Option<u32>,
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     signal: SignalKind,
-) -> Result<(), PtyError> {
+) -> Result<()> {
     #[cfg(unix)]
     {
         if let Some(pid) = pid {
@@ -413,10 +364,7 @@ fn signal_blocking(
                 };
 
                 kill_process(Pid::from_raw(pid as i32), os_signal).map_err(|source| {
-                    PtyError::new(
-                        PtyErrorCode::WriteFailed,
-                        format!("failed to send {signal:?} to PTY process {pid}: {source}"),
-                    )
+                    anyhow!("failed to send {signal:?} to PTY process {pid}: {source}")
                 })?;
                 return Ok(());
             }
@@ -424,15 +372,12 @@ fn signal_blocking(
     }
 
     let mut killer = killer.lock().expect("pty killer mutex poisoned");
-    killer.kill().map_err(|source| {
-        PtyError::new(
-            PtyErrorCode::WriteFailed,
-            format!("failed to terminate PTY process: {source}"),
-        )
-    })
+    killer
+        .kill()
+        .map_err(|source| anyhow!("failed to terminate PTY process: {source}"))
 }
 
-fn decode_escaped_input(input: &str) -> Result<String, PtyError> {
+fn decode_escaped_input(input: &str) -> Result<String> {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars();
 
@@ -442,12 +387,9 @@ fn decode_escaped_input(input: &str) -> Result<String, PtyError> {
             continue;
         }
 
-        let escaped = chars.next().ok_or_else(|| {
-            PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "input ended with a dangling escape sequence",
-            )
-        })?;
+        let escaped = chars
+            .next()
+            .ok_or_else(|| anyhow!("input ended with a dangling escape sequence"))?;
 
         match escaped {
             '\\' => output.push('\\'),
@@ -465,10 +407,7 @@ fn decode_escaped_input(input: &str) -> Result<String, PtyError> {
                 output.push(value as char);
             }
             other => {
-                return Err(PtyError::new(
-                    PtyErrorCode::InvalidArgument,
-                    format!("unsupported escape sequence: \\{other}"),
-                ));
+                return Err(anyhow!("unsupported escape sequence: \\{other}"));
             }
         }
     }
@@ -476,9 +415,6 @@ fn decode_escaped_input(input: &str) -> Result<String, PtyError> {
     Ok(output)
 }
 
-fn invalid_hex_escape(input: &str) -> PtyError {
-    PtyError::new(
-        PtyErrorCode::InvalidArgument,
-        format!("invalid hex escape in input: {input}"),
-    )
+fn invalid_hex_escape(input: &str) -> anyhow::Error {
+    anyhow!("invalid hex escape in input: {input}")
 }
