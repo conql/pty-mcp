@@ -310,28 +310,28 @@ tests/
 
 ### 7.4 SSH 会话 E2E 补测
 
-- [ ] `[高]` 增加 `shell` / `login` / `interactive` 组合透传的真实 E2E
+- [x] `[高]` 增加 `shell` / `login` / `interactive` 组合透传的真实 E2E
   - 建议至少覆盖：`interactive = false`、`login = true`、显式 `shell`
-  - 当前状态：完全未覆盖
-- [ ] `[中]` 为 `ssh_session_spawn` / `ssh_exec` 响应增加 `target_summary` 断言
-  - 当前状态：非 E2E 已覆盖
-- [ ] `[中]` 为 `pty_list` 中 SSH session summary 增加 `remote_command` 断言
-  - 当前状态：非 E2E 已覆盖
-- [ ] `[中]` 增加 home-relative cwd 的真实 E2E 专项断言
-  - 当前状态：非 E2E 已覆盖
+  - 当前状态：已覆盖（`tests/e2e_ssh_sessions.rs`）
+- [x] `[中]` 为 `ssh_session_spawn` / `ssh_exec` 响应增加 `target_summary` 断言
+  - 当前状态：已覆盖（`tests/e2e_ssh_sessions.rs`）
+- [x] `[中]` 为 `pty_list` 中 SSH session summary 增加 `remote_command` 断言
+  - 当前状态：已覆盖（`tests/e2e_ssh_sessions.rs`）
+- [x] `[中]` 增加 home-relative cwd 的真实 E2E 专项断言
+  - 当前状态：已覆盖（`tests/e2e_ssh_sessions.rs`）
 
 ### 7.5 SSH 挂载 E2E 补测
 
-- [ ] `[高]` 增加 managed mount path 与 explicit path 在 cleanup 行为上的差异 E2E
-  - 当前状态：非 E2E 已覆盖
-- [ ] `[高]` 增加缺失 `sshfs` capability 时 `ssh_mount` 失败的真实 E2E
-  - 当前状态：非 E2E 已覆盖
-- [ ] `[中]` 增加 mount 失败后 `ssh://mounts` 或 `ssh_list` 侧 failed summary / `last_error` 的真实 E2E
-  - 当前状态：非 E2E 已覆盖
-- [ ] `[中]` 增加 `ssh_unmount` tool 的真实 E2E
-  - 当前状态：非 E2E 已覆盖
-- [ ] `[中]` 增加 server shutdown 自动卸载 managed mounts 的真实 E2E
-  - 当前状态：非 E2E 已覆盖
+- [x] `[高]` 增加 managed mount path 与 explicit path 在 cleanup 行为上的差异 E2E
+  - 当前状态：已覆盖（`tests/e2e_ssh_mounts.rs`）
+- [x] `[高]` 增加缺失 `sshfs` capability 时 `ssh_mount` 失败的真实 E2E
+  - 当前状态：已覆盖（`tests/e2e_ssh_mounts.rs`）
+- [x] `[中]` 增加 mount 失败后 `ssh://mounts` 或 `ssh_list` 侧 failed summary / `last_error` 的真实 E2E
+  - 当前状态：已覆盖（`tests/e2e_ssh_mounts.rs`）
+- [x] `[中]` 增加 `ssh_unmount` tool 的真实 E2E
+  - 当前状态：已覆盖（`tests/e2e_ssh_mounts.rs`）
+- [x] `[中]` 增加 server shutdown 自动卸载 managed mounts 的真实 E2E
+  - 当前状态：已覆盖（`tests/e2e_ssh_mounts.rs`）
 
 ### 7.6 Real SSH Acceptance
 
