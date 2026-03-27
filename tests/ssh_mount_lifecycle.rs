@@ -5,7 +5,7 @@ use std::{
 };
 
 use pty_mcp::{
-    AppState, Config,
+    AppState, Config, SshConfig,
     app::{SshMountRequest, SshUnmountRequest},
     ssh::{SshConnectionStatus, SshMountId, SshMountStatus, SshTarget},
 };
@@ -84,12 +84,17 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
         ),
     )?;
 
-    let mut config = Config::default();
-    config.allowed_cwd_roots = vec![explicit_root.clone()];
-    config.ssh.allowed_mount_roots = vec![explicit_root.clone()];
-    config.ssh.managed_mount_root = Some(managed_root.clone());
-    config.ssh.sshfs_bin_path = Some(sshfs_path);
-    config.ssh.umount_bin_path = Some(umount_path);
+    let config = Config {
+        allowed_cwd_roots: vec![explicit_root.clone()],
+        ssh: SshConfig {
+            allowed_mount_roots: vec![explicit_root.clone()],
+            managed_mount_root: Some(managed_root.clone()),
+            sshfs_bin_path: Some(sshfs_path),
+            umount_bin_path: Some(umount_path),
+            ..SshConfig::default()
+        },
+        ..Config::default()
+    };
     let app = AppState::new(config);
     let connection = ready_connection(&app);
     let managed_path = managed_root.join("managed-mount");

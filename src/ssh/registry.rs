@@ -126,10 +126,10 @@ impl SshRegistry {
         let connection_id = summary.connection_id.clone();
 
         // Preserve lifecycle metadata if caller is doing a partial update.
-        if let Some(existing) = inner.connections.get(&connection_id) {
-            if summary.last_used_at.is_none() {
-                summary.last_used_at = existing.last_used_at;
-            }
+        if let Some(existing) = inner.connections.get(&connection_id)
+            && summary.last_used_at.is_none()
+        {
+            summary.last_used_at = existing.last_used_at;
         }
 
         inner
@@ -190,14 +190,13 @@ impl SshRegistry {
         if let Some(previous_connection_id) = inner
             .session_connections
             .insert(session_id.clone(), connection_id.clone())
+            && &previous_connection_id != connection_id
         {
-            if &previous_connection_id != connection_id {
-                if let Some(sessions) = inner.connection_sessions.get_mut(&previous_connection_id) {
-                    sessions.remove(session_id);
-                }
-                refresh_connection_counts(&mut inner, &previous_connection_id);
-                changed = true;
+            if let Some(sessions) = inner.connection_sessions.get_mut(&previous_connection_id) {
+                sessions.remove(session_id);
             }
+            refresh_connection_counts(&mut inner, &previous_connection_id);
+            changed = true;
         }
 
         let inserted = inner

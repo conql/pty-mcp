@@ -32,11 +32,8 @@ impl HomeDirGuard {
             .duration_since(UNIX_EPOCH)
             .expect("clock before unix epoch")
             .as_nanos();
-        let path = PathBuf::from(home).join(format!(
-            "pty_mcp_{prefix}_{}_{}",
-            std::process::id(),
-            nanos
-        ));
+        let path =
+            PathBuf::from(home).join(format!("pty_mcp_{prefix}_{}_{}", std::process::id(), nanos));
         fs::create_dir_all(&path)?;
         Ok(Self { path })
     }

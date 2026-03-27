@@ -54,11 +54,13 @@ fn probe_with_fake_binaries_captures_paths_and_versions() {
     write_executable_script(&umount_path, "#!/bin/sh\necho 'umount util-linux 2.39'\n");
     write_executable_script(&diskutil_path, "#!/bin/sh\necho 'diskutil 999.1'\n");
 
-    let mut config = SshConfig::default();
-    config.ssh_bin_path = Some(ssh_path.clone());
-    config.sshfs_bin_path = Some(sshfs_path.clone());
-    config.umount_bin_path = Some(umount_path.clone());
-    config.diskutil_bin_path = Some(diskutil_path.clone());
+    let config = SshConfig {
+        ssh_bin_path: Some(ssh_path.clone()),
+        sshfs_bin_path: Some(sshfs_path.clone()),
+        umount_bin_path: Some(umount_path.clone()),
+        diskutil_bin_path: Some(diskutil_path.clone()),
+        ..SshConfig::default()
+    };
 
     let probe = SshCapabilityProbe::new();
     let capabilities = probe.probe_with_config(&config);
@@ -128,10 +130,12 @@ fn probe_marks_missing_configured_paths_as_unavailable() {
     let missing_sshfs = temp.path.join("missing-sshfs");
     let missing_umount = temp.path.join("missing-umount");
 
-    let mut config = SshConfig::default();
-    config.ssh_bin_path = Some(missing_ssh.clone());
-    config.sshfs_bin_path = Some(missing_sshfs.clone());
-    config.umount_bin_path = Some(missing_umount.clone());
+    let config = SshConfig {
+        ssh_bin_path: Some(missing_ssh.clone()),
+        sshfs_bin_path: Some(missing_sshfs.clone()),
+        umount_bin_path: Some(missing_umount.clone()),
+        ..SshConfig::default()
+    };
 
     let probe = SshCapabilityProbe::new();
     let capabilities = probe.probe_with_config(&config);
@@ -174,9 +178,11 @@ fn probe_keeps_available_when_version_flags_are_unsupported() {
         "#!/bin/sh\necho 'usage: umount target' 1>&2\nexit 1\n",
     );
 
-    let mut config = SshConfig::default();
-    config.sshfs_bin_path = Some(sshfs_path.clone());
-    config.umount_bin_path = Some(umount_path.clone());
+    let config = SshConfig {
+        sshfs_bin_path: Some(sshfs_path.clone()),
+        umount_bin_path: Some(umount_path.clone()),
+        ..SshConfig::default()
+    };
 
     let probe = SshCapabilityProbe::new();
     let capabilities = probe.probe_with_config(&config);

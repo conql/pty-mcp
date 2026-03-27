@@ -1,4 +1,8 @@
-use std::{fs, path::PathBuf, time::SystemTime};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 use pty_mcp::{
     Config,
@@ -14,14 +18,15 @@ fn unique_temp_dir(suffix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("pty_mcp_permission_guard_{suffix}_{nanos}"))
 }
 
-fn base_config(root: &PathBuf) -> Config {
-    let mut config = Config::default();
-    config.allowed_cwd_roots = vec![root.clone()];
-    config.allowed_commands = vec!["cargo".to_string(), "bash".to_string()];
-    config.denied_commands = vec!["rm".to_string()];
-    config.allowed_env_vars = vec!["RUST_LOG".to_string(), "CI".to_string()];
-    config.denied_env_vars = vec!["LD_PRELOAD".to_string()];
-    config
+fn base_config(root: &Path) -> Config {
+    Config {
+        allowed_cwd_roots: vec![root.to_path_buf()],
+        allowed_commands: vec!["cargo".to_string(), "bash".to_string()],
+        denied_commands: vec!["rm".to_string()],
+        allowed_env_vars: vec!["RUST_LOG".to_string(), "CI".to_string()],
+        denied_env_vars: vec!["LD_PRELOAD".to_string()],
+        ..Config::default()
+    }
 }
 
 #[test]

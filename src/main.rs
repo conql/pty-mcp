@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use clap::Parser;
 use pty_mcp::{AppState, Config, PtyMcpServer};
 use rmcp::{ServiceExt, transport::stdio};
 
@@ -15,8 +16,19 @@ fn init_tracing() {
         .try_init();
 }
 
+#[derive(Debug, Parser)]
+#[command(
+    name = "pty-mcp",
+    version,
+    about = "Starts the PTY MCP server over stdio.",
+    long_about = None
+)]
+struct Cli;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = Cli::parse();
+
     init_tracing();
 
     let config = Config::from_env()?;
