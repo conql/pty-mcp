@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
+use anyhow::{Result, bail, ensure};
 
-use crate::{PtyError, PtyErrorCode, config::SshConfig};
+use crate::config::SshConfig;
 
 use super::{
     model::{SshAuthKind, SshTarget},
@@ -49,7 +49,7 @@ impl SshGuard {
         &self.policy
     }
 
-    pub fn validate_connect_target(&self, target: &SshTarget) -> Result<(), PtyError> {
+    pub fn validate_connect_target(&self, target: &SshTarget) -> Result<()> {
         self.policy
             .validate_target(&target.host, target.user.as_deref(), target.port)
     }
@@ -58,7 +58,7 @@ impl SshGuard {
         &self,
         config: &SshConfig,
         input: SshConnectValidationInput<'_>,
-    ) -> Result<SshConnectValidationResult, PtyError> {
+    ) -> Result<SshConnectValidationResult> {
         self.validate_connect_target(input.target)?;
         self.validate_host_user_port(config, input.target)?;
 
@@ -72,7 +72,7 @@ impl SshGuard {
         })
     }
 
-    pub fn validate_mount_local_path(&self, local_path: &Path) -> Result<(), PtyError> {
+    pub fn validate_mount_local_path(&self, local_path: &Path) -> Result<()> {
         self.policy.validate_local_mount_path(local_path)
     }
 
@@ -80,15 +80,14 @@ impl SshGuard {
         &self,
         config: &SshConfig,
         input: SshMountValidationInput<'_>,
-    ) -> Result<SshMountValidationResult, PtyError> {
+    ) -> Result<SshMountValidationResult> {
         self.validate_mount_local_path(input.local_path)?;
         let remote_path = input.remote_path.trim();
-        if remote_path.is_empty() || !remote_path.starts_with('/') {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "remote_path must be an absolute path",
-            ));
-        }
+        ensure!(
+            !remote_path.is_empty() && remote_path.starts_with('/'),
+            "remote_path must be an absolute path: remote_path={}",
+            input.remote_path
+        );
 
         let local_path = input.local_path.to_path_buf();
         let is_managed = config
@@ -100,18 +99,14 @@ impl SshGuard {
             .iter()
             .any(|root| local_path.starts_with(root));
 
-        if !is_managed && (!config.allow_explicit_mount_paths || !is_controlled_explicit) {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "mount local_path is outside allowed managed/controlled roots",
-            )
-            .with_details(json!({
-                "local_path": local_path,
-                "managed_mount_root": config.managed_mount_root,
-                "allow_explicit_mount_paths": config.allow_explicit_mount_paths,
-                "allowed_mount_roots": config.allowed_mount_roots,
-            })));
-        }
+        ensure!(
+            is_managed || (config.allow_explicit_mount_paths && is_controlled_explicit),
+            "mount local_path is outside allowed managed/controlled roots: local_path={} managed_mount_root={:?} allow_explicit_mount_paths={} allowed_mount_roots={:?}",
+            local_path.display(),
+            config.managed_mount_root,
+            config.allow_explicit_mount_paths,
+            config.allowed_mount_roots
+        );
 
         Ok(SshMountValidationResult {
             local_path,
@@ -124,7 +119,7 @@ impl SshGuard {
         &self,
         config: &SshConfig,
         target: &SshTarget,
-    ) -> Result<(), PtyError> {
+    ) -> Result<()> {
         let host = target.host.trim();
         let host_alias = target.host_alias.as_deref().unwrap_or_default().trim();
         let user = target.user.as_deref().unwrap_or_default().trim();
@@ -133,41 +128,28 @@ impl SshGuard {
         if contains_ci(&config.denied_hosts, host)
             || (!host_alias.is_empty() && contains_ci(&config.denied_hosts, host_alias))
         {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "target host is blocked by ssh policy",
-            ));
+            bail!("target host is blocked by ssh policy: host={host} host_alias={host_alias}");
         }
 
         if !config.allowed_hosts.is_empty()
             && !contains_ci(&config.allowed_hosts, host)
             && (host_alias.is_empty() || !contains_ci(&config.allowed_hosts, host_alias))
         {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "target host is not allowed by ssh policy",
-            ));
+            bail!("target host is not allowed by ssh policy: host={host} host_alias={host_alias}");
         }
 
         if !config.allowed_users.is_empty()
             && (user.is_empty() || !contains_ci(&config.allowed_users, user))
         {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "target user is not allowed by ssh policy",
-            ));
+            bail!("target user is not allowed by ssh policy: user={user} host={host}");
         }
 
         if port < config.port_min || port > config.port_max {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "target port is outside allowed ssh policy range",
-            )
-            .with_details(json!({
-                "port": port,
-                "port_min": config.port_min,
-                "port_max": config.port_max,
-            })));
+            bail!(
+                "target port is outside allowed ssh policy range: port={port} port_min={} port_max={} host={host}",
+                config.port_min,
+                config.port_max
+            );
         }
 
         Ok(())
@@ -178,7 +160,7 @@ impl SshGuard {
         config: &SshConfig,
         auth_kind: &SshAuthKind,
         target: &SshTarget,
-    ) -> Result<(), PtyError> {
+    ) -> Result<()> {
         if config.allowed_auth_kinds.is_empty() {
             return Ok(());
         }
@@ -189,17 +171,12 @@ impl SshGuard {
             SshAuthKind::IdentityFile => "identity_path",
         };
 
-        if !contains_ci(&config.allowed_auth_kinds, key) {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "ssh auth kind is blocked by policy",
-            )
-            .with_details(json!({
-                "auth_kind": key,
-                "allowed_auth_kinds": config.allowed_auth_kinds,
-                "host_alias": target.host_alias,
-            })));
-        }
+        ensure!(
+            contains_ci(&config.allowed_auth_kinds, key),
+            "ssh auth kind is blocked by policy: auth_kind={key} allowed_auth_kinds={:?} host_alias={:?}",
+            config.allowed_auth_kinds,
+            target.host_alias
+        );
 
         Ok(())
     }
@@ -209,7 +186,7 @@ fn resolve_auth_kind(
     target: &SshTarget,
     auth_kind: Option<SshAuthKind>,
     identity_path: Option<&str>,
-) -> Result<SshAuthKind, PtyError> {
+) -> Result<SshAuthKind> {
     if let Some(auth_kind) = auth_kind {
         return Ok(auth_kind);
     }
@@ -232,25 +209,19 @@ fn resolve_auth_kind(
 fn validate_identity_path(
     auth_kind: &SshAuthKind,
     identity_path: Option<&str>,
-) -> Result<Option<PathBuf>, PtyError> {
+) -> Result<Option<PathBuf>> {
     match auth_kind {
         SshAuthKind::IdentityFile => {
             let path = identity_path
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    PtyError::new(
-                        PtyErrorCode::InvalidArgument,
-                        "identity_path is required when auth_kind=identity_file",
-                    )
-                })?;
+                .ok_or_else(|| anyhow::anyhow!("identity_path is required when auth_kind=identity_file"))?;
             let path = PathBuf::from(path);
-            if !path.is_absolute() {
-                return Err(PtyError::new(
-                    PtyErrorCode::InvalidArgument,
-                    "identity_path must be an absolute path",
-                ));
-            }
+            ensure!(
+                path.is_absolute(),
+                "identity_path must be an absolute path: identity_path={}",
+                path.display()
+            );
             Ok(Some(path))
         }
         _ => Ok(None),

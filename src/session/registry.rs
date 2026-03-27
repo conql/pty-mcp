@@ -3,8 +3,9 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use anyhow::{Result, anyhow, bail};
+
 use crate::{
-    PtyError, PtyErrorCode,
     buffer::{BufferReadPage, BufferReadRequest, BufferStore, BufferView},
     pty::{PtyOutputReceiver, PtySessionHandle},
 };
@@ -72,14 +73,14 @@ impl SessionRegistry {
         }
     }
 
-    pub fn create_starting(&self, session: SessionSummary) -> Result<SessionId, PtyError> {
+    pub fn create_starting(&self, session: SessionSummary) -> Result<SessionId> {
         self.ensure_capacity()?;
         let session_id = session.session_id.clone();
         self.insert(session);
         Ok(session_id)
     }
 
-    pub fn mark_failed_to_spawn(&self, session_id: &SessionId) -> Result<(), PtyError> {
+    pub fn mark_failed_to_spawn(&self, session_id: &SessionId) -> Result<()> {
         self.with_session_mut(session_id, |entry| {
             entry.summary.status = SessionStatus::FailedToSpawn;
             entry.summary.exit_info = Some(ExitInfo::default());
@@ -93,7 +94,7 @@ impl SessionRegistry {
         pid: Option<u32>,
         handle: PtySessionHandle,
         mut output: PtyOutputReceiver,
-    ) -> Result<(), PtyError> {
+    ) -> Result<()> {
         self.with_session_mut(session_id, |entry| {
             entry.summary.status = SessionStatus::Running;
             entry.summary.pid = pid;
@@ -169,7 +170,7 @@ impl SessionRegistry {
             .map(|entry| entry.summary)
     }
 
-    pub fn cleanup(&self, session_id: &SessionId) -> Result<SessionSummary, PtyError> {
+    pub fn cleanup(&self, session_id: &SessionId) -> Result<SessionSummary> {
         self.remove(session_id)
             .ok_or_else(|| session_not_found(session_id))
     }
@@ -178,7 +179,7 @@ impl SessionRegistry {
         &self,
         session_id: &SessionId,
         request: &BufferReadRequest,
-    ) -> Result<BufferReadPage, PtyError> {
+    ) -> Result<BufferReadPage> {
         let sessions = self
             .inner
             .sessions
@@ -188,13 +189,10 @@ impl SessionRegistry {
             .get(session_id)
             .ok_or_else(|| session_not_found(session_id))?;
         entry.buffer.read(request).map_err(|err| {
-            PtyError::new(
-                PtyErrorCode::InvalidRegex,
-                "invalid regex pattern for buffer read",
+            anyhow!(
+                "invalid regex pattern for buffer read: session_id={} {err:#}",
+                session_id.as_str()
             )
-            .with_details(serde_json::json!({
-                "reason": format!("{err:#}"),
-            }))
         })
     }
 
@@ -202,7 +200,7 @@ impl SessionRegistry {
         &self,
         session_id: &SessionId,
         data: &str,
-    ) -> Result<SessionWriteResult, PtyError> {
+    ) -> Result<SessionWriteResult> {
         self.write_with_mode(session_id, data, false).await
     }
 
@@ -210,7 +208,7 @@ impl SessionRegistry {
         &self,
         session_id: &SessionId,
         data: &str,
-    ) -> Result<SessionWriteResult, PtyError> {
+    ) -> Result<SessionWriteResult> {
         self.write_with_mode(session_id, data, true).await
     }
 
@@ -219,7 +217,7 @@ impl SessionRegistry {
         session_id: &SessionId,
         signal: SignalKind,
         cleanup: bool,
-    ) -> Result<SessionKillResult, PtyError> {
+    ) -> Result<SessionKillResult> {
         let (previous_status, runtime, already_exited) = {
             let mut sessions = self
                 .inner
@@ -264,9 +262,9 @@ impl SessionRegistry {
                             .wait(Some(std::time::Duration::from_secs(2)))
                             .await?
                             .ok_or_else(|| {
-                                PtyError::new(
-                                    PtyErrorCode::Timeout,
-                                    "session did not exit before cleanup deadline",
+                                anyhow!(
+                                    "session did not exit before cleanup deadline: session_id={}",
+                                    session_id.as_str()
                                 )
                             })?
                     }
@@ -303,7 +301,7 @@ impl SessionRegistry {
         &self,
         session_id: &SessionId,
         timeout: Option<std::time::Duration>,
-    ) -> Result<SessionWaitResult, PtyError> {
+    ) -> Result<SessionWaitResult> {
         let runtime = {
             let sessions = self
                 .inner
@@ -348,7 +346,7 @@ impl SessionRegistry {
         })
     }
 
-    pub async fn shutdown(&self) -> Result<(), PtyError> {
+    pub async fn shutdown(&self) -> Result<()> {
         let session_ids = self
             .list()
             .into_iter()
@@ -368,7 +366,7 @@ impl SessionRegistry {
         Ok(())
     }
 
-    pub fn mark_exited(&self, session_id: &SessionId, exit_info: ExitInfo) -> Result<(), PtyError> {
+    pub fn mark_exited(&self, session_id: &SessionId, exit_info: ExitInfo) -> Result<()> {
         self.with_session_mut(session_id, |entry| {
             entry.summary.exit_info = Some(exit_info);
             entry.summary.status = if entry.termination_requested {
@@ -380,7 +378,7 @@ impl SessionRegistry {
         })
     }
 
-    pub fn append_output(&self, session_id: &SessionId, chunk: &[u8]) -> Result<(), PtyError> {
+    pub fn append_output(&self, session_id: &SessionId, chunk: &[u8]) -> Result<()> {
         self.with_session_mut(session_id, |entry| {
             entry.buffer.append_bytes(chunk);
             let stats = entry.buffer.stats();
@@ -391,25 +389,19 @@ impl SessionRegistry {
         })
     }
 
-    fn ensure_capacity(&self) -> Result<(), PtyError> {
+    fn ensure_capacity(&self) -> Result<()> {
         let sessions = self
             .inner
             .sessions
             .read()
             .expect("session registry poisoned");
         if sessions.len() >= self.inner.session_limit {
-            return Err(
-                PtyError::new(PtyErrorCode::SpawnFailed, "session limit reached").with_details(
-                    serde_json::json!({
-                        "session_limit": self.inner.session_limit,
-                    }),
-                ),
-            );
+            bail!("session limit reached: session_limit={}", self.inner.session_limit);
         }
         Ok(())
     }
 
-    fn with_session_mut<F>(&self, session_id: &SessionId, mutator: F) -> Result<(), PtyError>
+    fn with_session_mut<F>(&self, session_id: &SessionId, mutator: F) -> Result<()>
     where
         F: FnOnce(&mut SessionEntry),
     {
@@ -430,7 +422,7 @@ impl SessionRegistry {
         session_id: &SessionId,
         data: &str,
         escaped: bool,
-    ) -> Result<SessionWriteResult, PtyError> {
+    ) -> Result<SessionWriteResult> {
         let runtime = {
             let sessions = self
                 .inner
@@ -465,20 +457,12 @@ impl SessionRegistry {
     }
 }
 
-fn session_not_found(session_id: &SessionId) -> PtyError {
-    PtyError::new(PtyErrorCode::SessionNotFound, "session not found").with_details(
-        serde_json::json!({
-            "session_id": session_id.as_str(),
-        }),
-    )
+fn session_not_found(session_id: &SessionId) -> anyhow::Error {
+    anyhow!("session not found: session_id={}", session_id.as_str())
 }
 
-fn session_not_running(session_id: &SessionId) -> PtyError {
-    PtyError::new(PtyErrorCode::SessionNotRunning, "session is not running").with_details(
-        serde_json::json!({
-            "session_id": session_id.as_str(),
-        }),
-    )
+fn session_not_running(session_id: &SessionId) -> anyhow::Error {
+    anyhow!("session is not running: session_id={}", session_id.as_str())
 }
 
 fn preview_from_entry(entry: &SessionEntry) -> Option<String> {

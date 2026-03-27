@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf, time::SystemTime};
 
 use pty_mcp::{
-    Config, PtyErrorCode,
+    Config,
     permission::{PermissionGuard, PermissionPolicy, SpawnValidationInput},
 };
 use serde_json::{Map, Value, json};
@@ -64,7 +64,9 @@ fn guard_denies_command_not_in_allowlist() {
     });
 
     let error = result.expect_err("command should be denied");
-    assert_eq!(error.error_code, PtyErrorCode::PermissionDenied);
+    let text = format!("{error:#}");
+    assert!(text.contains("command is blocked by permission policy"));
+    assert!(text.contains("command=python"));
 }
 
 #[test]
@@ -83,7 +85,9 @@ fn guard_denies_cwd_outside_allowed_roots() {
     });
 
     let error = result.expect_err("cwd should be denied");
-    assert_eq!(error.error_code, PtyErrorCode::PermissionDenied);
+    let text = format!("{error:#}");
+    assert!(text.contains("cwd is not within allowed roots"));
+    assert!(text.contains(outside.to_string_lossy().as_ref()));
 }
 
 #[test]
@@ -106,5 +110,7 @@ fn guard_denies_blocked_env_key() {
     });
 
     let error = result.expect_err("env key should be denied");
-    assert_eq!(error.error_code, PtyErrorCode::PermissionDenied);
+    let text = format!("{error:#}");
+    assert!(text.contains("environment variable is blocked by permission policy"));
+    assert!(text.contains("LD_PRELOAD"));
 }

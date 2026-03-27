@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use pty_mcp::{
-    AppState, Config, PtyErrorCode, SpawnSessionRequest,
+    AppState, Config, SpawnSessionRequest,
     buffer::{BufferReadRequest, BufferView},
     session::{SessionId, SessionStatus, SignalKind},
 };
@@ -137,7 +137,8 @@ async fn app_state_kill_with_cleanup_removes_session_and_logs() -> anyhow::Resul
     let read_error = app
         .read_session(&session.session_id, &default_read_request())
         .expect_err("cleanup=true should remove retained logs");
-    assert_eq!(read_error.error_code, PtyErrorCode::SessionNotFound);
+    assert!(read_error.message.contains("session not found"));
+    assert!(read_error.message.contains(session.session_id.as_str()));
 
     Ok(())
 }

@@ -3,10 +3,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 
 use crate::session::SessionId;
-use crate::{PtyError, PtyErrorCode};
 
 use super::model::{
     SshCapabilityView, SshConnectionId, SshConnectionStatus, SshConnectionSummary, SshMountBackend,
@@ -219,7 +219,7 @@ impl SshRegistry {
         &self,
         connection_id: &SshConnectionId,
         session_id: SessionId,
-    ) -> Result<SshConnectionSummary, PtyError> {
+    ) -> Result<SshConnectionSummary> {
         if self.link_session(connection_id, &session_id)
             || self.get_connection(connection_id).is_some()
         {
@@ -246,7 +246,7 @@ impl SshRegistry {
         &self,
         connection_id: &SshConnectionId,
         session_id: &SessionId,
-    ) -> Result<SshConnectionSummary, PtyError> {
+    ) -> Result<SshConnectionSummary> {
         if self.unlink_session(session_id).is_some() {
             return self
                 .get_connection(connection_id)
@@ -373,7 +373,7 @@ impl SshRegistry {
     pub fn connection_relations(
         &self,
         connection_id: &SshConnectionId,
-    ) -> Result<SshConnectionRelations, PtyError> {
+    ) -> Result<SshConnectionRelations> {
         let inner = self.inner.read().expect("ssh registry poisoned");
         if !inner.connections.contains_key(connection_id) {
             return Err(ssh_connection_not_found(connection_id));
@@ -396,31 +396,25 @@ impl SshRegistry {
     pub fn ensure_disconnect_allowed(
         &self,
         connection_id: &SshConnectionId,
-    ) -> Result<(), PtyError> {
+    ) -> Result<()> {
         let counts = self
             .active_resource_counts(connection_id)
             .ok_or_else(|| ssh_connection_not_found(connection_id))?;
 
         if counts.active_session_count > 0 {
-            return Err(PtyError::new(
-                PtyErrorCode::SshActiveSessionExists,
-                "ssh connection still has active sessions",
-            )
-            .with_details(serde_json::json!({
-                "connection_id": connection_id.as_str(),
-                "active_session_count": counts.active_session_count,
-            })));
+            bail!(
+                "ssh connection still has active sessions: connection_id={} active_session_count={}",
+                connection_id.as_str(),
+                counts.active_session_count
+            );
         }
 
         if counts.active_mount_count > 0 {
-            return Err(PtyError::new(
-                PtyErrorCode::SshActiveMountExists,
-                "ssh connection still has active mounts",
-            )
-            .with_details(serde_json::json!({
-                "connection_id": connection_id.as_str(),
-                "active_mount_count": counts.active_mount_count,
-            })));
+            bail!(
+                "ssh connection still has active mounts: connection_id={} active_mount_count={}",
+                connection_id.as_str(),
+                counts.active_mount_count
+            );
         }
 
         Ok(())
@@ -455,7 +449,7 @@ impl SshRegistry {
         connection_id: &SshConnectionId,
         remote_path: impl Into<String>,
         local_path: impl Into<String>,
-    ) -> Result<SshMountSummary, PtyError> {
+    ) -> Result<SshMountSummary> {
         if self.get_connection(connection_id).is_none() {
             return Err(ssh_connection_not_found(connection_id));
         }
@@ -524,12 +518,9 @@ fn is_active_mount_status(status: &SshMountStatus) -> bool {
     )
 }
 
-fn ssh_connection_not_found(connection_id: &SshConnectionId) -> PtyError {
-    PtyError::new(
-        PtyErrorCode::SshConnectionNotFound,
-        "ssh connection not found",
+fn ssh_connection_not_found(connection_id: &SshConnectionId) -> anyhow::Error {
+    anyhow!(
+        "ssh connection not found: connection_id={}",
+        connection_id.as_str()
     )
-    .with_details(serde_json::json!({
-        "connection_id": connection_id.as_str(),
-    }))
 }

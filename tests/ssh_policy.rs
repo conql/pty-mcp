@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use pty_mcp::{
-    Config, PtyErrorCode,
+    Config,
     ssh::{SshAuthKind, SshGuard, SshPolicy, SshTarget},
 };
 
@@ -28,7 +28,9 @@ fn denied_hosts_are_rejected() {
         )
         .expect_err("denied host should be rejected");
 
-    assert_eq!(error.error_code, PtyErrorCode::PermissionDenied);
+    let text = format!("{error:#}");
+    assert!(text.contains("denied by policy") || text.contains("blocked by ssh policy"));
+    assert!(text.contains("prod.internal"));
 }
 
 #[test]
@@ -54,7 +56,9 @@ fn allowlisted_users_are_enforced() {
         )
         .expect_err("unexpected user should be rejected");
 
-    assert_eq!(error.error_code, PtyErrorCode::PermissionDenied);
+    let text = format!("{error:#}");
+    assert!(text.contains("user"));
+    assert!(text.contains("alice"));
 }
 
 #[test]
@@ -81,7 +85,11 @@ fn port_policy_range_is_enforced() {
         )
         .expect_err("unexpected port should be rejected");
 
-    assert_eq!(error.error_code, PtyErrorCode::PermissionDenied);
+    let text = format!("{error:#}");
+    assert!(text.contains("port"));
+    assert!(text.contains("22"));
+    assert!(text.contains("2200"));
+    assert!(text.contains("2299"));
 }
 
 #[test]
@@ -99,7 +107,9 @@ fn auth_policy_rejects_disallowed_identity_files() {
         )
         .expect_err("identity files should be rejected by auth policy");
 
-    assert_eq!(error.error_code, PtyErrorCode::PermissionDenied);
+    let text = format!("{error:#}");
+    assert!(text.contains("auth kind"));
+    assert!(text.contains("identity_path"));
 }
 
 #[test]
@@ -114,7 +124,9 @@ fn mount_path_must_be_under_managed_or_allowed_roots() {
     let error = policy
         .validate_local_mount_path(Path::new("/tmp/random"))
         .expect_err("path outside policy roots should be rejected");
-    assert_eq!(error.error_code, PtyErrorCode::PermissionDenied);
+    let text = format!("{error:#}");
+    assert!(text.contains("outside allowed roots"));
+    assert!(text.contains("/tmp/random"));
 
     policy
         .validate_local_mount_path(Path::new("/managed/repo"))
@@ -137,7 +149,9 @@ fn explicit_mount_paths_can_be_disabled() {
     let error = policy
         .validate_local_mount_path(Path::new("/workspace/repo"))
         .expect_err("explicit path should be rejected when disabled");
-    assert_eq!(error.error_code, PtyErrorCode::PermissionDenied);
+    let text = format!("{error:#}");
+    assert!(text.contains("explicit ssh mount paths are disabled by policy"));
+    assert!(text.contains("/workspace/repo"));
 
     policy
         .validate_local_mount_path(Path::new("/managed/repo"))
@@ -162,7 +176,9 @@ fn remote_mount_path_must_be_absolute() {
         )
         .expect_err("relative remote path should be rejected");
 
-    assert_eq!(error.error_code, PtyErrorCode::InvalidArgument);
+    let text = format!("{error:#}");
+    assert!(text.contains("remote_path must be an absolute path"));
+    assert!(text.contains("relative/path"));
 }
 
 fn build_config(mut configure: impl FnMut(&mut Config)) -> Config {

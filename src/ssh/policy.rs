@@ -4,7 +4,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use crate::{Config, PtyError, PtyErrorCode, ssh::SshAuthKind};
+use anyhow::{Result, bail, ensure};
+
+use crate::{Config, ssh::SshAuthKind};
 
 const DEFAULT_SSH_PORT: u16 = 22;
 
@@ -68,21 +70,16 @@ impl SshPolicy {
         host: &str,
         user: Option<&str>,
         port: Option<u16>,
-    ) -> Result<(), PtyError> {
-        let normalized_host = normalize_value(host).ok_or_else(|| {
-            PtyError::new(PtyErrorCode::InvalidArgument, "ssh host cannot be empty")
-        })?;
+    ) -> Result<()> {
+        let normalized_host =
+            normalize_value(host).ok_or_else(|| anyhow::anyhow!("ssh host cannot be empty"))?;
 
         if self
             .denied_hosts
             .iter()
             .any(|pattern| host_matches(pattern, &normalized_host))
         {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "ssh host is denied by policy",
-            )
-            .with_details(serde_json::json!({ "host": host })));
+            bail!("ssh host is denied by policy: host={host}");
         }
 
         if !self.allowed_hosts.is_empty()
@@ -91,50 +88,29 @@ impl SshPolicy {
                 .iter()
                 .any(|pattern| host_matches(pattern, &normalized_host))
         {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "ssh host is not in the allowlist",
-            )
-            .with_details(serde_json::json!({ "host": host })));
+            bail!("ssh host is not in the allowlist: host={host}");
         }
 
         if let Some(user) = user {
-            let normalized_user = normalize_value(user).ok_or_else(|| {
-                PtyError::new(PtyErrorCode::InvalidArgument, "ssh user cannot be empty")
-            })?;
+            let normalized_user =
+                normalize_value(user).ok_or_else(|| anyhow::anyhow!("ssh user cannot be empty"))?;
 
             if !self.allowed_users.is_empty() && !self.allowed_users.contains(&normalized_user) {
-                return Err(PtyError::new(
-                    PtyErrorCode::PermissionDenied,
-                    "ssh user is not in the allowlist",
-                )
-                .with_details(serde_json::json!({ "user": user })));
+                bail!("ssh user is not in the allowlist: user={user}");
             }
         } else if !self.allowed_users.is_empty() {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "ssh user is required by policy",
-            ));
+            bail!("ssh user is required by policy");
         }
 
         let port = port.unwrap_or(DEFAULT_SSH_PORT);
-        if port == 0 {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "ssh port must be greater than 0",
-            ));
-        }
+        ensure!(port != 0, "ssh port must be greater than 0: port={port}");
 
         if port < self.port_min || port > self.port_max {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "ssh port is outside the allowed policy range",
-            )
-            .with_details(serde_json::json!({
-                "port": port,
-                "port_min": self.port_min,
-                "port_max": self.port_max,
-            })));
+            bail!(
+                "ssh port is outside the allowed policy range: port={port} port_min={} port_max={}",
+                self.port_min,
+                self.port_max
+            );
         }
 
         Ok(())
@@ -145,7 +121,7 @@ impl SshPolicy {
         auth_kind: SshAuthKind,
         host_alias: Option<&str>,
         identity_path: Option<&Path>,
-    ) -> Result<(), PtyError> {
+    ) -> Result<()> {
         let normalized_auth_kind = normalize_value(match auth_kind {
             SshAuthKind::ConfigAlias => "host_alias",
             SshAuthKind::SshAgent => "ssh_agent",
@@ -155,56 +131,41 @@ impl SshPolicy {
         if !self.allowed_auth_kinds.is_empty()
             && !self.allowed_auth_kinds.contains(&normalized_auth_kind)
         {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "ssh auth kind is not allowed by policy",
-            )
-            .with_details(serde_json::json!({ "auth_kind": normalized_auth_kind })));
+            bail!("ssh auth kind is not allowed by policy: auth_kind={normalized_auth_kind}");
         }
 
         match auth_kind {
             SshAuthKind::ConfigAlias => {
-                if host_alias
+                ensure!(
+                    host_alias
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .is_none()
-                {
-                    return Err(PtyError::new(
-                        PtyErrorCode::InvalidArgument,
-                        "host_alias is required when auth_kind=config_alias",
-                    ));
-                }
+                    .is_some(),
+                    "host_alias is required when auth_kind=config_alias"
+                );
             }
             SshAuthKind::IdentityFile => {
                 let Some(identity_path) = identity_path else {
-                    return Err(PtyError::new(
-                        PtyErrorCode::InvalidArgument,
-                        "identity_path is required when auth_kind=identity_file",
-                    ));
+                    bail!("identity_path is required when auth_kind=identity_file");
                 };
 
-                if !identity_path.is_absolute() {
-                    return Err(PtyError::new(
-                        PtyErrorCode::InvalidArgument,
-                        "identity_path must be absolute",
-                    ));
-                }
+                ensure!(
+                    identity_path.is_absolute(),
+                    "identity_path must be absolute: identity_path={}",
+                    identity_path.display()
+                );
 
                 let metadata = fs::metadata(identity_path).map_err(|_| {
-                    PtyError::new(
-                        PtyErrorCode::InvalidArgument,
-                        "identity_path does not exist",
+                    anyhow::anyhow!(
+                        "identity_path does not exist: identity_path={}",
+                        identity_path.display()
                     )
-                    .with_details(serde_json::json!({
-                        "identity_path": identity_path.display().to_string(),
-                    }))
                 })?;
-                if !metadata.is_file() {
-                    return Err(PtyError::new(
-                        PtyErrorCode::InvalidArgument,
-                        "identity_path must be a file",
-                    ));
-                }
+                ensure!(
+                    metadata.is_file(),
+                    "identity_path must be a file: identity_path={}",
+                    identity_path.display()
+                );
             }
             SshAuthKind::SshAgent => {}
         }
@@ -212,33 +173,24 @@ impl SshPolicy {
         Ok(())
     }
 
-    pub fn validate_remote_path(&self, remote_path: &str) -> Result<(), PtyError> {
+    pub fn validate_remote_path(&self, remote_path: &str) -> Result<()> {
         let trimmed = remote_path.trim();
-        if trimmed.is_empty() {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "remote_path cannot be empty",
-            ));
-        }
+        ensure!(!trimmed.is_empty(), "remote_path cannot be empty");
 
-        if !trimmed.starts_with('/') {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "remote_path must be absolute",
-            )
-            .with_details(serde_json::json!({ "remote_path": remote_path })));
-        }
+        ensure!(
+            trimmed.starts_with('/'),
+            "remote_path must be absolute: remote_path={remote_path}"
+        );
 
         Ok(())
     }
 
-    pub fn validate_local_mount_path(&self, path: &Path) -> Result<(), PtyError> {
-        if !path.is_absolute() {
-            return Err(PtyError::new(
-                PtyErrorCode::InvalidArgument,
-                "ssh mount local_path must be absolute",
-            ));
-        }
+    pub fn validate_local_mount_path(&self, path: &Path) -> Result<()> {
+        ensure!(
+            path.is_absolute(),
+            "ssh mount local_path must be absolute: local_path={}",
+            path.display()
+        );
 
         let normalized = normalize_path(path);
         if let Some(root) = &self.managed_mount_root {
@@ -248,13 +200,10 @@ impl SshPolicy {
         }
 
         if !self.allow_explicit_mount_paths {
-            return Err(PtyError::new(
-                PtyErrorCode::PermissionDenied,
-                "explicit ssh mount paths are disabled by policy",
-            )
-            .with_details(serde_json::json!({
-                "local_path": normalized.display().to_string(),
-            })));
+            bail!(
+                "explicit ssh mount paths are disabled by policy: local_path={}",
+                normalized.display()
+            );
         }
 
         if self
@@ -265,18 +214,14 @@ impl SshPolicy {
             return Ok(());
         }
 
-        Err(PtyError::new(
-            PtyErrorCode::PermissionDenied,
-            "ssh mount local_path is outside allowed roots",
-        )
-        .with_details(serde_json::json!({
-            "local_path": normalized.display().to_string(),
-            "allowed_roots": self
-                .allowed_local_mount_roots
+        bail!(
+            "ssh mount local_path is outside allowed roots: local_path={} allowed_roots={:?}",
+            normalized.display(),
+            self.allowed_local_mount_roots
                 .iter()
                 .map(|root| root.display().to_string())
-                .collect::<Vec<_>>(),
-        })))
+                .collect::<Vec<_>>()
+        )
     }
 }
 

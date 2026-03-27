@@ -311,7 +311,8 @@ impl AppState {
                 auth_kind: request.auth_kind.clone(),
                 identity_path: request.identity_path.as_deref(),
             },
-        )?;
+        )
+        .map_err(map_policy_error)?;
         let identity_path = validated.identity_path.clone();
 
         if let Some(existing) =
@@ -477,7 +478,9 @@ impl AppState {
         connection_id: &SshConnectionId,
         session_id: SessionId,
     ) -> Result<SshConnectionSummary, PtyError> {
-        self.ssh_registry.track_session(connection_id, session_id)
+        self.ssh_registry
+            .track_session(connection_id, session_id)
+            .map_err(map_registry_error)
     }
 
     pub fn ssh_untrack_session(
@@ -485,14 +488,18 @@ impl AppState {
         connection_id: &SshConnectionId,
         session_id: &SessionId,
     ) -> Result<SshConnectionSummary, PtyError> {
-        self.ssh_registry.untrack_session(connection_id, session_id)
+        self.ssh_registry
+            .untrack_session(connection_id, session_id)
+            .map_err(map_registry_error)
     }
 
     pub fn ssh_connection_relations(
         &self,
         connection_id: &SshConnectionId,
     ) -> Result<SshConnectionRelations, PtyError> {
-        self.ssh_registry.connection_relations(connection_id)
+        self.ssh_registry
+            .connection_relations(connection_id)
+            .map_err(map_registry_error)
     }
 
     pub fn ssh_active_resource_counts(
@@ -504,7 +511,9 @@ impl AppState {
 
     pub fn ssh_disconnect_precheck(&self, connection_id: &SshConnectionId) -> Result<(), PtyError> {
         self.refresh_ssh_connection_session_tracking(connection_id);
-        self.ssh_registry.ensure_disconnect_allowed(connection_id)
+        self.ssh_registry
+            .ensure_disconnect_allowed(connection_id)
+            .map_err(map_registry_error)
     }
 
     pub async fn ssh_mount(&self, request: SshMountRequest) -> Result<SshMountSummary, PtyError> {
@@ -555,7 +564,8 @@ impl AppState {
                 local_path: &local_path,
                 remote_path: &request.remote_path,
             },
-        )?;
+        )
+        .map_err(map_policy_error)?;
 
         let created_local_path =
             self.ensure_mount_local_path(&validated.local_path, request.create_local_path)?;
@@ -694,12 +704,14 @@ impl AppState {
 
         if !request.force {
             self.ssh_registry
-                .ensure_disconnect_allowed(&request.connection_id)?;
+                .ensure_disconnect_allowed(&request.connection_id)
+                .map_err(map_registry_error)?;
         }
 
         let relations = self
             .ssh_registry
-            .connection_relations(&request.connection_id)?;
+            .connection_relations(&request.connection_id)
+            .map_err(map_registry_error)?;
         let active_mount_count = self
             .ssh_active_resource_counts(&request.connection_id)
             .map(|counts| counts.active_mount_count)
@@ -886,7 +898,7 @@ impl AppState {
             buffer_stats: Default::default(),
             exit_info: None,
         };
-        let session_id = self.registry.create_starting(summary)?;
+        let session_id = self.registry.create_starting(summary).map_err(map_registry_error)?;
 
         match self
             .runtime
@@ -899,7 +911,8 @@ impl AppState {
                     spawned.pid,
                     spawned.handle,
                     spawned.output,
-                )?;
+                )
+                .map_err(map_registry_error)?;
                 let _ = self
                     .ssh_registry
                     .track_session(&connection.connection_id, session_id.clone());
@@ -1016,7 +1029,7 @@ impl AppState {
             buffer_stats: Default::default(),
             exit_info: None,
         };
-        let session_id = self.registry.create_starting(summary)?;
+        let session_id = self.registry.create_starting(summary).map_err(map_registry_error)?;
 
         match self
             .runtime
@@ -1029,7 +1042,8 @@ impl AppState {
                     spawned.pid,
                     spawned.handle,
                     spawned.output,
-                )?;
+                )
+                .map_err(map_registry_error)?;
                 let _ = self
                     .ssh_registry
                     .track_session(&connection.connection_id, session_id.clone());
@@ -1252,7 +1266,8 @@ impl AppState {
             args: &request.args,
             cwd: request.cwd.as_deref(),
             env: request.env.as_ref(),
-        })?;
+        })
+        .map_err(map_policy_error)?;
 
         let session = SessionSummary {
             session_id: SessionId::new(),
@@ -1273,7 +1288,7 @@ impl AppState {
             buffer_stats: Default::default(),
             exit_info: None,
         };
-        let session_id = self.registry.create_starting(session)?;
+        let session_id = self.registry.create_starting(session).map_err(map_registry_error)?;
 
         let mut runtime_request = PtySpawnRequest::new(validated.command).args(validated.args);
         if let Some(cwd) = validated.cwd {
@@ -1290,7 +1305,8 @@ impl AppState {
                     spawned.pid,
                     spawned.handle,
                     spawned.output,
-                )?;
+                )
+                .map_err(map_registry_error)?;
             }
             Err(error) => {
                 let _ = self.registry.mark_failed_to_spawn(&session_id);
@@ -1311,9 +1327,15 @@ impl AppState {
         escaped: bool,
     ) -> Result<SessionWriteResult, PtyError> {
         if escaped {
-            self.registry.write_escaped(session_id, data).await
+            self.registry
+                .write_escaped(session_id, data)
+                .await
+                .map_err(map_registry_error)
         } else {
-            self.registry.write_plain(session_id, data).await
+            self.registry
+                .write_plain(session_id, data)
+                .await
+                .map_err(map_registry_error)
         }
     }
 
@@ -1322,7 +1344,9 @@ impl AppState {
         session_id: &SessionId,
         request: &BufferReadRequest,
     ) -> Result<BufferReadPage, PtyError> {
-        self.registry.read_output(session_id, request)
+        self.registry
+            .read_output(session_id, request)
+            .map_err(map_registry_error)
     }
 
     pub async fn kill_session(
@@ -1331,7 +1355,11 @@ impl AppState {
         signal: SignalKind,
         cleanup: bool,
     ) -> Result<SessionKillResult, PtyError> {
-        let outcome = self.registry.kill(session_id, signal, cleanup).await?;
+        let outcome = self
+            .registry
+            .kill(session_id, signal, cleanup)
+            .await
+            .map_err(map_registry_error)?;
         self.refresh_ssh_session_tracking(session_id);
         Ok(outcome)
     }
@@ -1341,14 +1369,18 @@ impl AppState {
         session_id: &SessionId,
         timeout: Option<std::time::Duration>,
     ) -> Result<SessionWaitResult, PtyError> {
-        let outcome = self.registry.wait(session_id, timeout).await?;
+        let outcome = self
+            .registry
+            .wait(session_id, timeout)
+            .await
+            .map_err(map_registry_error)?;
         self.refresh_ssh_session_tracking(session_id);
         Ok(outcome)
     }
 
     pub async fn shutdown(&self) -> Result<(), PtyError> {
         self.shutdown_ssh().await?;
-        self.registry.shutdown().await
+        self.registry.shutdown().await.map_err(map_registry_error)
     }
 
     pub async fn shutdown_ssh(&self) -> Result<(), PtyError> {
@@ -1685,6 +1717,59 @@ fn is_active_mount_status(status: &crate::ssh::SshMountStatus) -> bool {
             | crate::ssh::SshMountStatus::Mounted
             | crate::ssh::SshMountStatus::Unmounting
     )
+}
+
+fn map_policy_error(error: anyhow::Error) -> PtyError {
+    let message = error.to_string();
+    let is_permission_denied = [
+        "blocked by permission policy",
+        "not within allowed roots",
+        "denied by policy",
+        "not in the allowlist",
+        "required by policy",
+        "outside the allowed policy range",
+        "blocked by ssh policy",
+        "not allowed by ssh policy",
+        "outside allowed managed/controlled roots",
+        "outside allowed roots",
+        "explicit ssh mount paths are disabled by policy",
+        "not allowed by policy",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle));
+
+    let error_code = if is_permission_denied {
+        crate::PtyErrorCode::PermissionDenied
+    } else {
+        crate::PtyErrorCode::InvalidArgument
+    };
+
+    PtyError::new(error_code, message)
+}
+
+fn map_registry_error(error: anyhow::Error) -> PtyError {
+    let message = error.to_string();
+    let error_code = if message.contains("session not found") {
+        crate::PtyErrorCode::SessionNotFound
+    } else if message.contains("session is not running") {
+        crate::PtyErrorCode::SessionNotRunning
+    } else if message.contains("session limit reached") {
+        crate::PtyErrorCode::SpawnFailed
+    } else if message.contains("did not exit before cleanup deadline") {
+        crate::PtyErrorCode::Timeout
+    } else if message.contains("ssh connection not found") {
+        crate::PtyErrorCode::SshConnectionNotFound
+    } else if message.contains("active sessions") {
+        crate::PtyErrorCode::SshActiveSessionExists
+    } else if message.contains("active mounts") {
+        crate::PtyErrorCode::SshActiveMountExists
+    } else if message.contains("invalid regex pattern for buffer read") {
+        crate::PtyErrorCode::InvalidRegex
+    } else {
+        crate::PtyErrorCode::InvalidArgument
+    };
+
+    PtyError::new(error_code, message)
 }
 
 fn validate_remote_path<'a>(path: &'a str, field: &str) -> Result<&'a str, PtyError> {
