@@ -301,12 +301,12 @@ tests/
 
 ### 7.3 SSH 连接与策略 E2E 补测
 
-- [ ] `[高]` 增加缺失 `ssh` capability 时 `ssh_connect` 的真实二进制 E2E
-  - 当前状态：非 E2E 已覆盖
-- [ ] `[高]` 增加 host/user/port/auth policy 拒绝行为的真实 E2E
-  - 当前状态：非 E2E 已覆盖
-- [ ] `[高]` 增加 `verify_host_key = true` 的 fake `ssh` 透传检查
-  - 当前状态：完全未覆盖
+- [x] `[高]` 增加缺失 `ssh` capability 时 `ssh_connect` 的真实二进制 E2E
+  - 当前状态：已覆盖（`tests/e2e_ssh_connect.rs`）
+- [x] `[高]` 增加 host/user/port/auth policy 拒绝行为的真实 E2E
+  - 当前状态：已覆盖（`tests/e2e_ssh_connect.rs`）
+- [x] `[高]` 增加 `verify_host_key = true` 的 fake `ssh` 透传检查
+  - 当前状态：已覆盖（`tests/e2e_ssh_connect.rs`）
 
 ### 7.4 SSH 会话 E2E 补测
 
