@@ -161,8 +161,14 @@ The server also exposes structured resources:
 - `ssh://connections/{id}`
 - `ssh://mounts`
 - `ssh://mounts/{id}`
+- `ssh://docs/mount-setup`
+- `ssh://docs/mount-setup/{platform}`
 
 These are useful when the client wants a snapshot without invoking a tool.
+
+The SSH mount setup guides are meant for agents: when `sshfs`/FUSE support is missing, the
+agent can read these resources and then guide the user through the right local installation flow
+for the current platform instead of guessing.
 
 ## Runtime Requirements
 

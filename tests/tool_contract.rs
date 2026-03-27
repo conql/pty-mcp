@@ -595,6 +595,60 @@ async fn resources_expose_session_snapshots() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn resources_expose_mount_setup_guides() -> anyhow::Result<()> {
+    let app = Arc::new(AppState::new(Config::default()));
+
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server = PtyMcpServer::new(app);
+
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let resources = client.list_resources(None).await?;
+    assert!(
+        resources
+            .resources
+            .iter()
+            .any(|resource| resource.raw.uri == "ssh://docs/mount-setup")
+    );
+    assert!(resources.resources.iter().any(|resource| {
+        resource.raw.uri == format!("ssh://docs/mount-setup/{}", std::env::consts::OS)
+    }));
+
+    let generic = client
+        .read_resource(ReadResourceRequestParams::new("ssh://docs/mount-setup"))
+        .await?;
+    let generic_text = match &generic.contents[0] {
+        rmcp::model::ResourceContents::TextResourceContents { text, .. } => text.clone(),
+        other => anyhow::bail!("unexpected generic guide contents: {other:?}"),
+    };
+    assert!(generic_text.contains("SSH Mount Setup Guide"));
+    assert!(generic_text.contains("capabilities.sshfs.available = false"));
+
+    let platform_uri = format!("ssh://docs/mount-setup/{}", std::env::consts::OS);
+    let platform = client
+        .read_resource(ReadResourceRequestParams::new(platform_uri))
+        .await?;
+    let platform_text = match &platform.contents[0] {
+        rmcp::model::ResourceContents::TextResourceContents { text, .. } => text.clone(),
+        other => anyhow::bail!("unexpected platform guide contents: {other:?}"),
+    };
+    let expected_heading = match std::env::consts::OS {
+        "macos" => "## macOS",
+        "linux" => "## Linux",
+        _ => "## Generic Platform Guidance",
+    };
+    assert!(platform_text.contains(expected_heading));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
 async fn wait_for_read_match(
     client: &rmcp::service::RunningService<rmcp::RoleClient, DummyClient>,
     session_id: &SessionId,

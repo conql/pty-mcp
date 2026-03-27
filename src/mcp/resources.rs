@@ -16,7 +16,14 @@ use crate::{
 const SESSIONS_URI: &str = "pty://sessions";
 const SSH_CONNECTIONS_URI: &str = "ssh://connections";
 const SSH_MOUNTS_URI: &str = "ssh://mounts";
+const SSH_MOUNT_SETUP_URI: &str = "ssh://docs/mount-setup";
+const SSH_MOUNT_SETUP_TEMPLATE_URI: &str = "ssh://docs/mount-setup/{platform}";
 const TAIL_LINE_COUNT: usize = 100;
+const SSH_MOUNT_SETUP_GUIDE: &str = include_str!("../../docs/mcp/ssh-mount-setup.md");
+const SSH_MOUNT_SETUP_MACOS_GUIDE: &str = include_str!("../../docs/mcp/ssh-mount-setup-macos.md");
+const SSH_MOUNT_SETUP_LINUX_GUIDE: &str = include_str!("../../docs/mcp/ssh-mount-setup-linux.md");
+const SSH_MOUNT_SETUP_GENERIC_GUIDE: &str =
+    include_str!("../../docs/mcp/ssh-mount-setup-generic.md");
 
 // `ErrorData` is only used at the MCP resource protocol boundary.
 // Missing resources map to `resource_not_found`; unexpected read failures map
@@ -42,6 +49,24 @@ pub fn list_resources(app: &AppState) -> ListResourcesResult {
             .with_description("Structured summary of all known SSH connections.")
             .with_mime_type("application/json")
             .no_annotation(),
+        RawResource::new(SSH_MOUNT_SETUP_URI, "ssh-mount-setup")
+            .with_title("SSH Mount Setup Guide")
+            .with_description(
+                "Agent-facing installation and troubleshooting guide for local sshfs/FUSE setup.",
+            )
+            .with_mime_type("text/markdown")
+            .no_annotation(),
+        RawResource::new(
+            format!("{SSH_MOUNT_SETUP_URI}/{}", app.ssh_capabilities().platform),
+            format!("ssh-mount-setup-{}", app.ssh_capabilities().platform),
+        )
+        .with_title(format!(
+            "SSH Mount Setup Guide ({})",
+            app.ssh_capabilities().platform
+        ))
+        .with_description("Platform-specific guide for local sshfs/FUSE setup.")
+        .with_mime_type("text/markdown")
+        .no_annotation(),
     ];
 
     if mount_feature_available {
@@ -137,6 +162,11 @@ pub fn list_resource_templates(app: &AppState) -> ListResourceTemplatesResult {
             .with_description("Snapshot for a single SSH connection.")
             .with_mime_type("application/json")
             .no_annotation(),
+        RawResourceTemplate::new(SSH_MOUNT_SETUP_TEMPLATE_URI, "ssh-mount-setup-platform")
+            .with_title("SSH Mount Setup Guide (Platform)")
+            .with_description("Platform-specific installation and troubleshooting guide.")
+            .with_mime_type("text/markdown")
+            .no_annotation(),
     ];
 
     if app.ssh_mount_feature_available() {
@@ -161,11 +191,13 @@ pub fn read_resource(app: &AppState, uri: &str) -> Result<ReadResourceResult, Er
         SSH_MOUNTS_URI if app.ssh_mount_feature_available() => {
             json_contents(uri, json!({ "mounts": app.ssh_list_mounts() }))
         }
+        SSH_MOUNT_SETUP_URI => markdown_contents(uri, SSH_MOUNT_SETUP_GUIDE),
         _ if uri.starts_with("pty://sessions/") => read_session_resource(app, uri)?,
         _ if uri.starts_with("ssh://connections/") => read_ssh_connection_resource(app, uri)?,
         _ if uri.starts_with("ssh://mounts/") && app.ssh_mount_feature_available() => {
             read_ssh_mount_resource(app, uri)?
         }
+        _ if uri.starts_with("ssh://docs/mount-setup/") => read_ssh_mount_setup_doc(uri)?,
         _ => return Err(resource_not_found()),
     };
 
@@ -293,7 +325,27 @@ fn read_ssh_mount_resource(app: &AppState, uri: &str) -> Result<ResourceContents
     ))
 }
 
+fn read_ssh_mount_setup_doc(uri: &str) -> Result<ResourceContents, ErrorData> {
+    let platform = uri
+        .strip_prefix("ssh://docs/mount-setup/")
+        .filter(|platform| !platform.is_empty() && !platform.contains('/'))
+        .ok_or_else(resource_not_found)?;
+    Ok(markdown_contents(uri, ssh_mount_setup_guide(platform)))
+}
+
 fn json_contents(uri: &str, value: serde_json::Value) -> ResourceContents {
     let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
     ResourceContents::text(text, uri).with_mime_type("application/json")
+}
+
+fn markdown_contents(uri: &str, text: &str) -> ResourceContents {
+    ResourceContents::text(text.to_string(), uri).with_mime_type("text/markdown")
+}
+
+fn ssh_mount_setup_guide(platform: &str) -> &'static str {
+    match platform {
+        "macos" | "darwin" => SSH_MOUNT_SETUP_MACOS_GUIDE,
+        "linux" => SSH_MOUNT_SETUP_LINUX_GUIDE,
+        _ => SSH_MOUNT_SETUP_GENERIC_GUIDE,
+    }
 }

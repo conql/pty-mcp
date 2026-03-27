@@ -76,8 +76,11 @@ impl ServerHandler for PtyMcpServer {
                  ssh_session_spawn, ssh_exec, ssh_read_file, ssh_write_file, ssh_list_dir, \
                  ssh_mkdir{ssh_mount_tools} ssh_list, and ssh_disconnect to manage SSH \
                  connections, remote sessions, remote files, and mount summaries. Resources \
-                 expose read-only snapshots, including pty://sessions plus ssh://connections{ssh_mount_resources}, \
-                 and tasks are available as an optional enhancement."
+                 expose read-only snapshots, including pty://sessions plus ssh://connections{ssh_mount_resources}. \
+                 When SSH mount support is unavailable or a mount fails because \
+                 local prerequisites are missing, read ssh://docs/mount-setup and the matching \
+                 ssh://docs/mount-setup/{{platform}} guide before suggesting installation steps. \
+                 Tasks are available as an optional enhancement."
             ),
         )
     }
