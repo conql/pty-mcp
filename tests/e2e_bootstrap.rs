@@ -29,6 +29,7 @@ async fn binary_bootstraps_and_exposes_core_protocol_surface() -> Result<()> {
             "ssh_list",
             "ssh_session_spawn",
             "ssh_exec",
+            "ssh_run",
             "ssh_read_file",
             "ssh_write_file",
             "ssh_list_dir",

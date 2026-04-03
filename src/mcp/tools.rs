@@ -10,7 +10,8 @@ use crate::{
     app::{
         SshConnectRequest as AppSshConnectRequest, SshDirectoryEntryType,
         SshDisconnectRequest as AppSshDisconnectRequest, SshExecRequest as AppSshExecRequest,
-        SshMountRequest as AppSshMountRequest, SshSessionSpawnRequest as AppSshSessionSpawnRequest,
+        SshMountRequest as AppSshMountRequest, SshRunRequest as AppSshRunRequest,
+        SshSessionSpawnRequest as AppSshSessionSpawnRequest,
         SshUnmountRequest as AppSshUnmountRequest,
     },
     buffer::{BufferReadPage, BufferReadRequest, BufferView},
@@ -214,6 +215,22 @@ pub struct SshExecRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshRunRequest {
+    pub connection_id: SshConnectionId,
+    pub script: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshSessionSpawnResponse {
     pub connection_id: SshConnectionId,
     pub session_id: SessionId,
@@ -224,6 +241,18 @@ pub struct SshSessionSpawnResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_cwd: Option<String>,
     pub started_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshRunResponse {
+    pub connection_id: SshConnectionId,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_signal: Option<String>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -688,6 +717,40 @@ impl PtyMcpServer {
                 target_summary: spawned.target_summary,
                 remote_cwd: spawned.remote_cwd,
                 started_at: spawned.started_at,
+            }),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
+        }
+    }
+
+    #[tool(
+        name = "ssh_run",
+        description = "Run a one-shot shell script on an existing SSH connection and return stdout, stderr, and exit status directly.",
+        execution(task_support = "optional")
+    )]
+    pub async fn ssh_run(
+        &self,
+        Parameters(request): Parameters<SshRunRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match self
+            .app()
+            .ssh_run(AppSshRunRequest {
+                connection_id: request.connection_id.clone(),
+                script: request.script,
+                cwd: request.cwd,
+                env: request.env,
+                shell: request.shell,
+                login: request.login.unwrap_or(false),
+                timeout_ms: request.timeout_ms,
+            })
+            .await
+        {
+            Ok(result) => structured(&SshRunResponse {
+                connection_id: result.connection_id,
+                success: result.success,
+                exit_code: result.exit_code,
+                exit_signal: result.exit_signal,
+                stdout: result.stdout,
+                stderr: result.stderr,
             }),
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
