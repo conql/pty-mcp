@@ -65,10 +65,11 @@ fn mounted_summary(connection_id: pty_mcp::ssh::SshConnectionId, suffix: &str) -
 fn app_state_exposes_ssh_registry_connection_summary() {
     let app = test_app();
     let target = default_target();
-    let created = app.ssh_create_placeholder_connection(target.clone());
+    let created = app.ssh().create_placeholder_connection(target.clone());
 
     let fetched = app
-        .ssh_get_connection(&created.connection_id)
+        .ssh()
+        .get_connection(&created.connection_id)
         .expect("connection should exist");
     assert_eq!(fetched.connection_id, created.connection_id);
     assert_eq!(fetched.target, target);
@@ -81,14 +82,14 @@ fn app_state_exposes_ssh_registry_connection_summary() {
 #[test]
 fn app_state_tracks_multiple_mounts_for_same_connection() {
     let app = test_app();
-    let connection = app.ssh_create_placeholder_connection(default_target());
+    let connection = app.ssh().create_placeholder_connection(default_target());
     let mount_one = mounted_summary(connection.connection_id.clone(), "one");
     let mount_two = mounted_summary(connection.connection_id.clone(), "two");
 
-    app.ssh_upsert_mount(mount_one.clone());
-    app.ssh_upsert_mount(mount_two.clone());
+    app.ssh().upsert_mount(mount_one.clone());
+    app.ssh().upsert_mount(mount_two.clone());
 
-    let listed = app.ssh_list_mounts();
+    let listed = app.ssh().list_mounts();
     assert_eq!(listed.len(), 2);
     assert!(
         listed
@@ -100,33 +101,39 @@ fn app_state_tracks_multiple_mounts_for_same_connection() {
             .iter()
             .any(|mount| mount.mount_id == mount_two.mount_id)
     );
-    assert!(app.ssh_get_mount(&mount_one.mount_id).is_some());
-    assert!(app.ssh_get_mount(&mount_two.mount_id).is_some());
+    assert!(app.ssh().get_mount(&mount_one.mount_id).is_some());
+    assert!(app.ssh().get_mount(&mount_two.mount_id).is_some());
 
-    let removed = app.ssh_remove_mounts_for_connection(&connection.connection_id);
+    let removed = app
+        .ssh()
+        .remove_mounts_for_connection(&connection.connection_id);
     assert_eq!(removed, 2);
-    assert!(app.ssh_list_mounts().is_empty());
+    assert!(app.ssh().list_mounts().is_empty());
 }
 
 #[test]
 fn disconnect_precheck_rejects_connection_with_active_sessions() {
     let app = test_app();
-    let connection = app.ssh_create_placeholder_connection(default_target());
+    let connection = app.ssh().create_placeholder_connection(default_target());
     let first = pty_mcp::session::SessionId::new();
     let second = pty_mcp::session::SessionId::new();
-    app.ssh_track_session(&connection.connection_id, first)
+    app.ssh()
+        .track_session(&connection.connection_id, first)
         .expect("first session tracked");
-    app.ssh_track_session(&connection.connection_id, second)
+    app.ssh()
+        .track_session(&connection.connection_id, second)
         .expect("second session tracked");
 
     let counts = app
-        .ssh_active_resource_counts(&connection.connection_id)
+        .ssh()
+        .active_resource_counts(&connection.connection_id)
         .expect("resource counts should exist");
     assert_eq!(counts.active_session_count, 2);
     assert_eq!(counts.active_mount_count, 0);
 
     let error = app
-        .ssh_disconnect_precheck(&connection.connection_id)
+        .ssh()
+        .disconnect_precheck(&connection.connection_id)
         .expect_err("disconnect should be rejected");
     let text = format!("{error:#}");
     assert!(text.contains("active sessions"));
@@ -136,21 +143,23 @@ fn disconnect_precheck_rejects_connection_with_active_sessions() {
 #[test]
 fn disconnect_precheck_rejects_connection_with_active_mounts() {
     let app = test_app();
-    let mut connection = app.ssh_create_placeholder_connection(default_target());
+    let mut connection = app.ssh().create_placeholder_connection(default_target());
     connection.status = SshConnectionStatus::Ready;
-    app.ssh_upsert_connection(connection.clone());
+    app.ssh().upsert_connection(connection.clone());
 
     let mount = mounted_summary(connection.connection_id.clone(), "active");
-    app.ssh_upsert_mount(mount);
+    app.ssh().upsert_mount(mount);
 
     let relations = app
-        .ssh_connection_relations(&connection.connection_id)
+        .ssh()
+        .connection_relations(&connection.connection_id)
         .expect("relations should exist");
     assert!(relations.session_ids.is_empty());
     assert_eq!(relations.mount_ids.len(), 1);
 
     let error = app
-        .ssh_disconnect_precheck(&connection.connection_id)
+        .ssh()
+        .disconnect_precheck(&connection.connection_id)
         .expect_err("disconnect should be rejected");
     let text = format!("{error:#}");
     assert!(text.contains("active mounts"));
@@ -160,29 +169,31 @@ fn disconnect_precheck_rejects_connection_with_active_mounts() {
 #[test]
 fn disconnect_precheck_allows_idle_connection() {
     let app = test_app();
-    let mut connection = app.ssh_create_placeholder_connection(default_target());
+    let mut connection = app.ssh().create_placeholder_connection(default_target());
     connection.status = SshConnectionStatus::Ready;
     connection.active_session_count = 0;
     connection.active_mount_count = 0;
-    app.ssh_upsert_connection(connection.clone());
+    app.ssh().upsert_connection(connection.clone());
 
-    app.ssh_disconnect_precheck(&connection.connection_id)
+    app.ssh()
+        .disconnect_precheck(&connection.connection_id)
         .expect("idle connection should pass precheck");
 }
 
 #[tokio::test]
 async fn force_disconnect_requires_cleanup_mounts_to_remove_active_mounts() {
     let app = test_app();
-    let mut connection = app.ssh_create_placeholder_connection(default_target());
+    let mut connection = app.ssh().create_placeholder_connection(default_target());
     connection.status = SshConnectionStatus::Ready;
-    app.ssh_upsert_connection(connection.clone());
-    app.ssh_upsert_mount(mounted_summary(
+    app.ssh().upsert_connection(connection.clone());
+    app.ssh().upsert_mount(mounted_summary(
         connection.connection_id.clone(),
         "force-required",
     ));
 
     let error = app
-        .ssh_disconnect(SshDisconnectRequest {
+        .ssh()
+        .disconnect(SshDisconnectRequest {
             connection_id: connection.connection_id,
             force: true,
             cleanup_mounts: false,
@@ -200,7 +211,8 @@ fn disconnect_precheck_reports_missing_connection() {
     let unknown_id = pty_mcp::ssh::SshConnectionId::new();
 
     let error = app
-        .ssh_disconnect_precheck(&unknown_id)
+        .ssh()
+        .disconnect_precheck(&unknown_id)
         .expect_err("unknown connection should fail");
     let text = format!("{error:#}");
     assert!(text.contains("ssh connection not found"));
@@ -473,11 +485,11 @@ async fn ssh_connect_and_ssh_list_support_reuse_flow() -> anyhow::Result<()> {
 async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result<()> {
     let sandbox = TempDirGuard::new("mount_resources_visible")?;
     let app = Arc::new(AppState::new(mount_feature_available_config(&sandbox)?));
-    let mut connection = app.ssh_create_placeholder_connection(default_target());
+    let mut connection = app.ssh().create_placeholder_connection(default_target());
     connection.status = SshConnectionStatus::Ready;
-    app.ssh_upsert_connection(connection.clone());
+    app.ssh().upsert_connection(connection.clone());
     let mount = mounted_summary(connection.connection_id.clone(), "resource");
-    app.ssh_upsert_mount(mount.clone());
+    app.ssh().upsert_mount(mount.clone());
 
     let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
     let server = PtyMcpServer::new(app);
@@ -552,8 +564,9 @@ async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result
 #[tokio::test]
 async fn ssh_mount_resources_are_hidden_when_mount_feature_is_unavailable() -> anyhow::Result<()> {
     let app = Arc::new(AppState::new(mount_feature_unavailable_config()));
-    let connection = app.ssh_create_placeholder_connection(default_target());
-    app.ssh_upsert_mount(mounted_summary(connection.connection_id.clone(), "hidden"));
+    let connection = app.ssh().create_placeholder_connection(default_target());
+    app.ssh()
+        .upsert_mount(mounted_summary(connection.connection_id.clone(), "hidden"));
 
     let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
     let server = PtyMcpServer::new(app);
@@ -641,9 +654,9 @@ async fn ssh_connect_reports_capability_unavailable_when_ssh_missing() -> anyhow
 async fn ssh_mount_requires_local_path_in_tool_contract() -> anyhow::Result<()> {
     let sandbox = TempDirGuard::new("mount_requires_local_path")?;
     let app = Arc::new(AppState::new(mount_feature_available_config(&sandbox)?));
-    let mut connection = app.ssh_create_placeholder_connection(default_target());
+    let mut connection = app.ssh().create_placeholder_connection(default_target());
     connection.status = SshConnectionStatus::Ready;
-    app.ssh_upsert_connection(connection.clone());
+    app.ssh().upsert_connection(connection.clone());
 
     let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
     let server = PtyMcpServer::new(app);

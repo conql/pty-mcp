@@ -50,9 +50,9 @@ impl Drop for TempDirGuard {
 }
 
 fn ready_connection(app: &AppState) -> pty_mcp::ssh::SshConnectionSummary {
-    let mut connection = app.ssh_create_placeholder_connection(default_target());
+    let mut connection = app.ssh().create_placeholder_connection(default_target());
     connection.status = SshConnectionStatus::Ready;
-    app.ssh_upsert_connection(connection.clone());
+    app.ssh().upsert_connection(connection.clone());
     connection
 }
 
@@ -100,7 +100,8 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
     let managed_path = managed_root.join("managed-mount");
 
     let managed_mount = app
-        .ssh_mount(SshMountRequest {
+        .ssh()
+        .mount(SshMountRequest {
             connection_id: connection.connection_id.clone(),
             remote_path: "/srv/project".to_string(),
             local_path: managed_path.display().to_string(),
@@ -116,14 +117,16 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
     assert!(managed_path.starts_with(&managed_root));
     assert!(managed_path.join(".sshfs-mounted").exists());
     assert_eq!(
-        app.ssh_get_connection(&connection.connection_id)
+        app.ssh()
+            .get_connection(&connection.connection_id)
             .expect("connection should exist")
             .active_mount_count,
         1
     );
 
     let managed_unmount = app
-        .ssh_unmount(SshUnmountRequest {
+        .ssh()
+        .unmount(SshUnmountRequest {
             mount_id: managed_mount.mount_id.clone(),
             force: false,
             cleanup_local_path: true,
@@ -137,7 +140,8 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
     let explicit_path = explicit_root.join("explicit-mount");
     fs::create_dir_all(&explicit_path)?;
     let explicit_mount = app
-        .ssh_mount(SshMountRequest {
+        .ssh()
+        .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "/srv/project-explicit".to_string(),
             local_path: explicit_path.display().to_string(),
@@ -150,7 +154,8 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
         .await?;
 
     let explicit_unmount = app
-        .ssh_unmount(SshUnmountRequest {
+        .ssh()
+        .unmount(SshUnmountRequest {
             mount_id: explicit_mount.mount_id,
             force: false,
             cleanup_local_path: true,
@@ -174,7 +179,8 @@ async fn ssh_mount_reports_capability_unavailable_when_sshfs_missing() -> anyhow
     let connection = ready_connection(&app);
 
     let error = app
-        .ssh_mount(SshMountRequest {
+        .ssh()
+        .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "/srv/project".to_string(),
             local_path: sandbox
@@ -200,7 +206,8 @@ async fn ssh_mount_reports_capability_unavailable_when_sshfs_missing() -> anyhow
 async fn ssh_unmount_reports_missing_mount() -> anyhow::Result<()> {
     let app = AppState::new(Config::default());
     let error = app
-        .ssh_unmount(SshUnmountRequest {
+        .ssh()
+        .unmount(SshUnmountRequest {
             mount_id: SshMountId::new(),
             force: false,
             cleanup_local_path: false,
@@ -232,7 +239,8 @@ async fn ssh_mount_failures_are_recorded_on_mount_summary() -> anyhow::Result<()
     let local_path = managed_root.join("failing-mount");
 
     let error = app
-        .ssh_mount(SshMountRequest {
+        .ssh()
+        .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "/srv/project".to_string(),
             local_path: local_path.display().to_string(),
@@ -247,7 +255,7 @@ async fn ssh_mount_failures_are_recorded_on_mount_summary() -> anyhow::Result<()
     let text = format!("{error:#}");
     assert!(text.contains("ssh mount failed"));
 
-    let mounts = app.ssh_list_mounts();
+    let mounts = app.ssh().list_mounts();
     assert_eq!(mounts.len(), 1);
     assert_eq!(mounts[0].status, SshMountStatus::Failed);
     let last_error = mounts[0].last_error.as_deref().unwrap_or_default();
@@ -282,7 +290,8 @@ async fn shutdown_unmounts_managed_mounts() -> anyhow::Result<()> {
     let local_path = managed_root.join("shutdown-mount");
 
     let _mount = app
-        .ssh_mount(SshMountRequest {
+        .ssh()
+        .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "/srv/project".to_string(),
             local_path: local_path.display().to_string(),

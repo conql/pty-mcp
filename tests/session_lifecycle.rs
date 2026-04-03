@@ -10,6 +10,7 @@ use pty_mcp::{
 async fn app_state_spawn_write_read_and_exit_lifecycle() -> anyhow::Result<()> {
     let app = AppState::new(Config::default());
     let session = app
+        .local()
         .spawn_session(SpawnSessionRequest {
             command: "sh".to_string(),
             args: vec![
@@ -28,6 +29,7 @@ async fn app_state_spawn_write_read_and_exit_lifecycle() -> anyhow::Result<()> {
     wait_for_output_contains(&app, &session.session_id, "ready", Duration::from_secs(5)).await?;
 
     let write = app
+        .local()
         .write_session(&session.session_id, "hello\\n", true)
         .await?;
     assert_eq!(write.bytes_written, "hello\n".len());
@@ -48,8 +50,8 @@ async fn app_state_spawn_write_read_and_exit_lifecycle() -> anyhow::Result<()> {
     .await?;
 
     let summary = app
-        .registry()
-        .get(&session.session_id)
+        .local()
+        .get_session(&session.session_id)
         .expect("session should remain in registry after normal exit");
     assert_eq!(summary.status, SessionStatus::Exited);
     assert!(summary.buffer_stats.line_count >= 2);
@@ -61,6 +63,7 @@ async fn app_state_spawn_write_read_and_exit_lifecycle() -> anyhow::Result<()> {
 async fn app_state_kill_without_cleanup_retains_session_and_logs() -> anyhow::Result<()> {
     let app = AppState::new(Config::default());
     let session = app
+        .local()
         .spawn_session(SpawnSessionRequest {
             command: "sh".to_string(),
             args: vec![
@@ -78,6 +81,7 @@ async fn app_state_kill_without_cleanup_retains_session_and_logs() -> anyhow::Re
     wait_for_output_contains(&app, &session.session_id, "boot", Duration::from_secs(5)).await?;
 
     let kill = app
+        .local()
         .kill_session(&session.session_id, SignalKind::Sigterm, false)
         .await?;
     assert_eq!(kill.previous_status, SessionStatus::Running);
@@ -92,8 +96,8 @@ async fn app_state_kill_without_cleanup_retains_session_and_logs() -> anyhow::Re
     .await?;
 
     let summary = app
-        .registry()
-        .get(&session.session_id)
+        .local()
+        .get_session(&session.session_id)
         .expect("session should still exist when cleanup=false");
     assert_eq!(summary.status, SessionStatus::Killed);
 
@@ -113,6 +117,7 @@ async fn app_state_kill_without_cleanup_retains_session_and_logs() -> anyhow::Re
 async fn app_state_kill_with_cleanup_removes_session_and_logs() -> anyhow::Result<()> {
     let app = AppState::new(Config::default());
     let session = app
+        .local()
         .spawn_session(SpawnSessionRequest {
             command: "sh".to_string(),
             args: vec![
@@ -127,12 +132,13 @@ async fn app_state_kill_with_cleanup_removes_session_and_logs() -> anyhow::Resul
         .await?;
 
     let kill = app
+        .local()
         .kill_session(&session.session_id, SignalKind::Sigterm, true)
         .await?;
     assert_eq!(kill.previous_status, SessionStatus::Running);
     assert!(kill.cleanup);
 
-    assert!(app.registry().get(&session.session_id).is_none());
+    assert!(app.local().get_session(&session.session_id).is_none());
 
     let read_error = app
         .read_session(&session.session_id, &default_read_request())
@@ -148,6 +154,7 @@ async fn app_state_kill_with_cleanup_removes_session_and_logs() -> anyhow::Resul
 async fn app_state_wait_reports_timeout_then_completion() -> anyhow::Result<()> {
     let app = AppState::new(Config::default());
     let session = app
+        .local()
         .spawn_session(SpawnSessionRequest {
             command: "sh".to_string(),
             args: vec![
@@ -162,11 +169,13 @@ async fn app_state_wait_reports_timeout_then_completion() -> anyhow::Result<()> 
         .await?;
 
     let timed_out = app
+        .local()
         .wait_session(&session.session_id, Some(Duration::from_millis(10)))
         .await?;
     assert!(!timed_out.completed);
 
     let completed = app
+        .local()
         .wait_session(&session.session_id, Some(Duration::from_secs(3)))
         .await?;
     assert!(completed.completed);
@@ -186,6 +195,7 @@ async fn app_state_wait_reports_timeout_then_completion() -> anyhow::Result<()> 
 async fn app_state_shutdown_cleans_up_running_sessions() -> anyhow::Result<()> {
     let app = AppState::new(Config::default());
     let session = app
+        .local()
         .spawn_session(SpawnSessionRequest {
             command: "sh".to_string(),
             args: vec![
@@ -200,7 +210,7 @@ async fn app_state_shutdown_cleans_up_running_sessions() -> anyhow::Result<()> {
         .await?;
 
     app.shutdown().await?;
-    assert!(app.registry().get(&session.session_id).is_none());
+    assert!(app.local().get_session(&session.session_id).is_none());
 
     Ok(())
 }
@@ -241,7 +251,7 @@ async fn wait_for_status(
 ) -> anyhow::Result<SessionStatus> {
     let started = Instant::now();
     loop {
-        if let Some(summary) = app.registry().get(session_id)
+        if let Some(summary) = app.local().get_session(session_id)
             && expected.contains(&summary.status)
         {
             return Ok(summary.status);
