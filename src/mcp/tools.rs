@@ -198,7 +198,7 @@ impl JsonSchema for SshConnectRequest {
                 },
                 "port": {
                     "type": ["integer", "null"],
-                    "minimum": 0,
+                    "minimum": 1,
                     "maximum": 65535,
                     "description": "SSH port. Default: 22."
                 },
@@ -229,8 +229,24 @@ impl JsonSchema for SshConnectRequest {
                 }
             },
             "anyOf": [
-                { "required": ["host_alias"] },
-                { "required": ["host"] }
+                {
+                    "required": ["host_alias"],
+                    "properties": {
+                        "host_alias": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    }
+                },
+                {
+                    "required": ["host"],
+                    "properties": {
+                        "host": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    }
+                }
             ]
         })
     }
@@ -1388,18 +1404,40 @@ fn read_response_from_page(
     status: SessionStatus,
     page: BufferReadPage,
 ) -> PtyReadResponse {
-    let line_numbers = page
-        .lines
-        .iter()
-        .map(|line| line.line_number)
-        .collect::<Vec<_>>();
-    let first_line_number = line_numbers.first().copied();
-    let non_contiguous_line_numbers =
-        if line_numbers.len() <= 1 || line_numbers.windows(2).all(|pair| pair[1] == pair[0] + 1) {
-            None
-        } else {
-            Some(line_numbers)
-        };
+    let mut first_line_number = None;
+    let mut previous_line_number = None;
+    let mut collected_line_numbers: Option<Vec<usize>> = None;
+
+    for line in &page.lines {
+        let line_number = line.line_number;
+        if first_line_number.is_none() {
+            first_line_number = Some(line_number);
+        }
+
+        match previous_line_number {
+            Some(previous) if line_number != previous + 1 => {
+                let numbers = collected_line_numbers.get_or_insert_with(|| {
+                    let mut numbers = Vec::with_capacity(page.lines.len());
+                    if let Some(first) = first_line_number {
+                        let mut current = first;
+                        while current <= previous {
+                            numbers.push(current);
+                            current += 1;
+                        }
+                    }
+                    numbers
+                });
+                numbers.push(line_number);
+            }
+            _ => {
+                if let Some(numbers) = collected_line_numbers.as_mut() {
+                    numbers.push(line_number);
+                }
+            }
+        }
+
+        previous_line_number = Some(line_number);
+    }
     let lines = page
         .lines
         .iter()
@@ -1415,7 +1453,7 @@ fn read_response_from_page(
         has_more: page.has_more,
         total_lines: page.total_lines,
         first_line_number,
-        line_numbers: non_contiguous_line_numbers,
+        line_numbers: collected_line_numbers,
         lines,
     }
 }

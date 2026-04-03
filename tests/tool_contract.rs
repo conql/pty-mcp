@@ -120,9 +120,29 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
     assert_eq!(
         connect_schema["anyOf"],
         serde_json::json!([
-            { "required": ["host_alias"] },
-            { "required": ["host"] }
+            {
+                "required": ["host_alias"],
+                "properties": {
+                    "host_alias": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                }
+            },
+            {
+                "required": ["host"],
+                "properties": {
+                    "host": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                }
+            }
         ])
+    );
+    assert_eq!(
+        connect_schema["properties"]["port"]["minimum"],
+        serde_json::json!(1)
     );
     let connect_required = connect_schema
         .get("required")
