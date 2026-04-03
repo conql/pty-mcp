@@ -117,6 +117,7 @@ flowchart LR
 - `pty_spawn`: start a local PTY process
 - `pty_write`: send input to a running PTY session
 - `pty_read`: page through retained output, optionally filtering by regex pattern
+  - returns compact text plus line-number metadata: `first_line_number` always when available, and `line_numbers` only when the result is non-contiguous
 - `pty_list`: list known PTY sessions
 - `pty_kill`: stop a PTY session with `sigint`, `sigterm`, or `sigkill`
 - `pty_wait`: wait for a PTY session to exit
@@ -130,6 +131,8 @@ flowchart LR
 ### SSH tools
 
 - `ssh_connect`: create or reuse an SSH connection handle
+  - provide `host` or `host_alias`
+  - optional `auth_kind` values: `ssh_agent`, `identity_file`, `config_alias`
 - `ssh_list`: list SSH connections and mounts
 - `ssh_session_spawn`: start a remote PTY session over an existing SSH connection
   - optional `wait_for_output_ms`: wait briefly for initial remote PTY output and return it inline as `initial_output`
@@ -142,7 +145,9 @@ flowchart LR
   - optional `wait_for_completion_ms`: wait briefly for the script to finish and return completion state, exit code, and `initial_output` inline
   - if the script does not finish within that window, use `pty_wait` and `pty_read` with the returned `session_id`
 - `ssh_read_file`: read a UTF-8 text file from the remote host
+  - optional `max_bytes`: allowed range `1..=524288`, default `131072`
 - `ssh_write_file`: write a UTF-8 text file to the remote host
+  - `content` must be UTF-8 text and is capped at `262144` bytes
 - `ssh_list_dir`: list one remote directory level
 - `ssh_mkdir`: create a remote directory
 - `ssh_mount`: mount a remote path locally through `sshfs`

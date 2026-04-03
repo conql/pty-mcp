@@ -13,6 +13,13 @@ use crate::{
 
 use super::{LocalSessionService, SshService, types::SpawnSessionRequest};
 
+fn session_description(description: Option<String>, command: &str) -> String {
+    description
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("PTY session: {command}"))
+}
+
 impl LocalSessionService {
     pub fn list_sessions(&self) -> Vec<SessionSummary> {
         self.context.registry.list()
@@ -37,7 +44,7 @@ impl LocalSessionService {
         let session = SessionSummary {
             session_id: SessionId::new(),
             title: request.title,
-            description: request.description,
+            description: session_description(request.description, &validated.command),
             transport: SessionTransport::Local,
             command: validated.command.clone(),
             args: validated.args.clone(),
@@ -164,7 +171,7 @@ mod tests {
                 cwd: None,
                 env: None,
                 title: None,
-                description: "spawn failure".into(),
+                description: Some("spawn failure".into()),
             })
             .await
             .unwrap_err();
