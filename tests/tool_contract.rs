@@ -253,12 +253,8 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
 
     let ready = wait_for_read_match(&client, &spawned.session_id, "ready").await?;
     assert!(ready.lines.contains("ready"));
-    assert!(
-        ready
-            .line_items
-            .iter()
-            .any(|line| line.text.contains("ready"))
-    );
+    assert!(ready.first_line_number.is_some());
+    assert!(ready.line_numbers.is_none());
 
     let write_result = client
         .call_tool(
@@ -281,12 +277,7 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
     let echoed =
         wait_for_read_match(&client, &write_payload.session_id, "echo:hello from tool").await?;
     assert!(echoed.lines.contains("echo:hello from tool"));
-    assert!(
-        echoed
-            .line_items
-            .iter()
-            .any(|line| line.text.contains("echo:hello from tool"))
-    );
+    assert!(echoed.first_line_number.is_some());
 
     let list_result = client
         .call_tool(CallToolRequestParams::new("pty_list"))

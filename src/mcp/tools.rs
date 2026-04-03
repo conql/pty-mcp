@@ -145,7 +145,10 @@ pub struct PtyReadResponse {
     pub returned: usize,
     pub has_more: bool,
     pub total_lines: usize,
-    pub line_items: Vec<PtyReadLine>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_line_number: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_numbers: Option<Vec<usize>>,
     pub lines: String,
 }
 
@@ -1385,14 +1388,18 @@ fn read_response_from_page(
     status: SessionStatus,
     page: BufferReadPage,
 ) -> PtyReadResponse {
-    let line_items = page
+    let line_numbers = page
         .lines
         .iter()
-        .map(|line| PtyReadLine {
-            line_number: line.line_number,
-            text: line.text.clone(),
-        })
+        .map(|line| line.line_number)
         .collect::<Vec<_>>();
+    let first_line_number = line_numbers.first().copied();
+    let non_contiguous_line_numbers =
+        if line_numbers.len() <= 1 || line_numbers.windows(2).all(|pair| pair[1] == pair[0] + 1) {
+            None
+        } else {
+            Some(line_numbers)
+        };
     let lines = page
         .lines
         .iter()
@@ -1407,7 +1414,8 @@ fn read_response_from_page(
         returned: page.returned,
         has_more: page.has_more,
         total_lines: page.total_lines,
-        line_items,
+        first_line_number,
+        line_numbers: non_contiguous_line_numbers,
         lines,
     }
 }

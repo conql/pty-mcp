@@ -117,7 +117,7 @@ flowchart LR
 - `pty_spawn`: start a local PTY process
 - `pty_write`: send input to a running PTY session
 - `pty_read`: page through retained output, optionally filtering by regex pattern
-  - returns both `line_items` with stable line numbers and a compatibility `lines` string
+  - returns compact text plus line-number metadata: `first_line_number` always when available, and `line_numbers` only when the result is non-contiguous
 - `pty_list`: list known PTY sessions
 - `pty_kill`: stop a PTY session with `sigint`, `sigterm`, or `sigkill`
 - `pty_wait`: wait for a PTY session to exit

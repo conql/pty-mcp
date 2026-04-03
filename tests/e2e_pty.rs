@@ -75,12 +75,7 @@ async fn local_pty_main_flow_runs_through_real_binary_stdio() -> Result<()> {
         )
         .await?;
     ensure!(echoed.lines.contains("echo:hello e2e"));
-    ensure!(
-        echoed
-            .line_items
-            .iter()
-            .any(|line| line.text.contains("echo:hello e2e"))
-    );
+    ensure!(echoed.first_line_number.is_some());
 
     let listed = harness
         .call_tool_typed::<PtyListResponse>("pty_list", json!({}))
@@ -250,7 +245,7 @@ async fn local_pty_read_supports_ansi_raw_and_case_insensitive_matching() -> Res
         .await?;
     ensure!(ansi.returned == 1);
     ensure!(ansi.lines.contains("\u{1b}[31mRED\u{1b}[0m"));
-    ensure!(ansi.line_items[0].text.contains("\u{1b}[31mRED\u{1b}[0m"));
+    ensure!(ansi.first_line_number.is_some());
 
     let raw = harness
         .call_tool_typed::<PtyReadResponse>(
