@@ -1,7 +1,7 @@
 use rmcp::{
     ErrorData, Json, handler::server::wrapper::Parameters, model::CallToolResult, tool, tool_router,
 };
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_value};
 
@@ -26,19 +26,34 @@ use super::service::PtyMcpServer;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PtySpawnRequest {
+    #[schemars(description = "Executable or shell command to start in the new PTY session.")]
     pub command: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(description = "Argument vector passed to the spawned command.")]
     pub args: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Working directory for the spawned process.")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Environment variable overrides. Values must be scalar JSON values.")]
     pub env: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Optional short title for display in session listings.")]
     pub title: Option<String>,
-    pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Optional human-readable note stored with the session. Defaults to a generated summary."
+    )]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Milliseconds to wait for first output before returning. Default: 0."
+    )]
     pub wait_for_output_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Maximum number of output lines to include in initial_output. Default: server read limit."
+    )]
     pub output_limit: Option<usize>,
     #[schemars(
         description = "Read view for initial output. Allowed values: plain | ansi | raw. Default: plain."
@@ -100,12 +115,16 @@ pub struct PtyWriteResponse {
 pub struct PtyReadRequest {
     pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Zero-based starting line offset. Default: 0.")]
     pub offset: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Maximum number of lines to return. Default: server read limit.")]
     pub limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Optional regular expression applied after view selection.")]
     pub pattern: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Whether regex matching should ignore case. Default: false.")]
     pub ignore_case: Option<bool>,
     #[schemars(description = "Read view. Allowed values: plain | ansi | raw. Default: plain.")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,6 +145,7 @@ pub struct PtyReadResponse {
     pub returned: usize,
     pub has_more: bool,
     pub total_lines: usize,
+    pub line_items: Vec<PtyReadLine>,
     pub lines: String,
 }
 
@@ -134,7 +154,7 @@ pub struct PtyListResponse {
     pub sessions: Vec<SessionSummary>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshConnectRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_alias: Option<String>,
@@ -146,16 +166,71 @@ pub struct SshConnectRequest {
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_path: Option<String>,
-    #[schemars(
-        description = "Authentication mode. Allowed values: agent | key | password. Default: auto-detect from local SSH configuration."
-    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_kind: Option<SshAuthKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verify_host_key: Option<bool>,
+}
+
+impl JsonSchema for SshConnectRequest {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SshConnectRequest".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "object",
+            "properties": {
+                "host_alias": {
+                    "type": ["string", "null"],
+                    "description": "SSH config alias to connect to. Provide this or host."
+                },
+                "host": {
+                    "type": ["string", "null"],
+                    "description": "SSH hostname to connect to. Provide this or host_alias."
+                },
+                "port": {
+                    "type": ["integer", "null"],
+                    "minimum": 0,
+                    "maximum": 65535,
+                    "description": "SSH port. Default: 22."
+                },
+                "user": {
+                    "type": ["string", "null"],
+                    "description": "Remote username."
+                },
+                "identity_path": {
+                    "type": ["string", "null"],
+                    "description": "Absolute path to the SSH identity file. Required when auth_kind=identity_file."
+                },
+                "auth_kind": {
+                    "type": ["string", "null"],
+                    "enum": ["ssh_agent", "identity_file", "config_alias", null],
+                    "description": "Authentication mode. Allowed values: ssh_agent | identity_file | config_alias. Default: inferred from host_alias and identity_path."
+                },
+                "title": {
+                    "type": ["string", "null"],
+                    "description": "Optional short title for display in connection listings."
+                },
+                "description": {
+                    "type": ["string", "null"],
+                    "description": "Optional human-readable note stored with the connection. Defaults to a generated summary."
+                },
+                "verify_host_key": {
+                    "type": ["boolean", "null"],
+                    "description": "Whether SSH host key verification should remain enabled. Default: true."
+                }
+            },
+            "anyOf": [
+                { "required": ["host_alias"] },
+                { "required": ["host"] }
+            ]
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -179,25 +254,47 @@ pub struct SshListResponse {
 pub struct SshSessionSpawnRequest {
     pub connection_id: SshConnectionId,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Command to run on the remote host. Omit to open the remote shell directly."
+    )]
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(description = "Argument vector passed to the remote command.")]
     pub args: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote working directory. Must be an absolute path or ~/...")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote environment overrides. Values must be scalar JSON values.")]
     pub env: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote shell binary to invoke when shell wrapping is needed.")]
     pub shell: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Whether to request an interactive remote shell. Default: true.")]
     pub interactive: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Whether to start the remote shell as a login shell. Default: false."
+    )]
     pub login: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Optional short title for display in session listings.")]
     pub title: Option<String>,
-    pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Optional human-readable note stored with the session. Defaults to a generated summary."
+    )]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Milliseconds to wait for first output before returning. Default: 0."
+    )]
     pub wait_for_output_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Maximum number of output lines to include in initial_output. Default: server read limit."
+    )]
     pub output_limit: Option<usize>,
     #[schemars(
         description = "Read view for initial output. Allowed values: plain | ansi | raw. Default: plain."
@@ -209,21 +306,39 @@ pub struct SshSessionSpawnRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshExecRequest {
     pub connection_id: SshConnectionId,
+    #[schemars(description = "Shell script to execute remotely. Must not be empty.")]
     pub script: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote working directory. Must be an absolute path or ~/...")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote environment overrides. Values must be scalar JSON values.")]
     pub env: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote shell binary used to execute the script.")]
     pub shell: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Whether to start the remote shell as a login shell. Default: false."
+    )]
     pub login: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Optional short title for display in session listings.")]
     pub title: Option<String>,
-    pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Optional human-readable note stored with the session. Defaults to a generated summary."
+    )]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Milliseconds to wait for completion before returning status fields. If omitted, return immediately after spawn."
+    )]
     pub wait_for_completion_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Maximum number of output lines to include in initial_output. Default: server read limit."
+    )]
     pub output_limit: Option<usize>,
     #[schemars(
         description = "Read view for returned output. Allowed values: plain | ansi | raw. Default: plain."
@@ -235,19 +350,29 @@ pub struct SshExecRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshRunRequest {
     pub connection_id: SshConnectionId,
+    #[schemars(description = "Shell script to execute remotely. Must not be empty.")]
     pub script: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote working directory. Must be an absolute path or ~/...")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote environment overrides. Values must be scalar JSON values.")]
     pub env: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote shell binary used to execute the script.")]
     pub shell: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Whether to start the remote shell as a login shell. Default: false."
+    )]
     pub login: Option<bool>,
     #[schemars(description = "Maximum combined stdout+stderr bytes to capture. Default: 262144.")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_bytes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Milliseconds before aborting the remote command. If omitted, wait until completion."
+    )]
     pub timeout_ms: Option<u64>,
 }
 
@@ -302,9 +427,14 @@ pub struct SshRunResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshMountRequest {
     pub connection_id: SshConnectionId,
+    #[schemars(description = "Absolute remote path to mount.")]
     pub remote_path: String,
+    #[schemars(
+        description = "Local mount target path. Must be inside the configured managed or allowed mount roots."
+    )]
     pub local_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Mount the remote filesystem read-only. Default: false.")]
     pub read_only: Option<bool>,
     #[schemars(
         description = "Mount backend. Allowed values: sshfs. Default: automatic backend selection."
@@ -312,10 +442,18 @@ pub struct SshMountRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<SshMountBackend>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Create the local mount directory if it does not already exist. Default: true."
+    )]
     pub create_local_path: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Optional short title for display in mount listings.")]
     pub title: Option<String>,
-    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Optional human-readable note stored with the mount. Defaults to a generated summary."
+    )]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -370,6 +508,9 @@ pub struct SshReadFileRequest {
     pub connection_id: SshConnectionId,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Maximum UTF-8 file size to read, in bytes. Allowed range: 1..=524288. Default: 131072."
+    )]
     pub max_bytes: Option<usize>,
 }
 
@@ -385,10 +526,13 @@ pub struct SshReadFileResponse {
 pub struct SshWriteFileRequest {
     pub connection_id: SshConnectionId,
     pub path: String,
+    #[schemars(description = "UTF-8 file content to write. Maximum size: 262144 bytes.")]
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Append to the file instead of overwriting it. Default: false.")]
     pub append: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Create parent directories before writing. Default: false.")]
     pub create_parent: Option<bool>,
 }
 
@@ -421,6 +565,7 @@ pub struct SshListDirRequest {
     pub connection_id: SshConnectionId,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Whether hidden entries should be included. Default: false.")]
     pub include_hidden: Option<bool>,
 }
 
@@ -436,6 +581,7 @@ pub struct SshMkdirRequest {
     pub connection_id: SshConnectionId,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Create parent directories as needed. Default: false.")]
     pub parents: Option<bool>,
 }
 
@@ -470,6 +616,9 @@ pub struct PtyKillResponse {
 pub struct PtyWaitRequest {
     pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Maximum time to wait before returning. If omitted, wait until the session exits."
+    )]
     pub timeout_ms: Option<u64>,
 }
 
@@ -665,7 +814,7 @@ impl PtyMcpServer {
                 auth_kind: request.auth_kind,
                 identity_path: request.identity_path,
                 title: request.title,
-                description: Some(request.description),
+                description: request.description,
                 verify_host_key: request.verify_host_key.unwrap_or(true),
             })
             .await
@@ -1236,6 +1385,14 @@ fn read_response_from_page(
     status: SessionStatus,
     page: BufferReadPage,
 ) -> PtyReadResponse {
+    let line_items = page
+        .lines
+        .iter()
+        .map(|line| PtyReadLine {
+            line_number: line.line_number,
+            text: line.text.clone(),
+        })
+        .collect::<Vec<_>>();
     let lines = page
         .lines
         .iter()
@@ -1250,6 +1407,7 @@ fn read_response_from_page(
         returned: page.returned,
         has_more: page.has_more,
         total_lines: page.total_lines,
+        line_items,
         lines,
     }
 }

@@ -27,13 +27,24 @@ struct PreparedRemoteExecution {
 struct RemoteSessionSpawnInput {
     connection: SshConnectionSummary,
     title: Option<String>,
-    description: String,
+    description: Option<String>,
     remote_cwd: Option<String>,
     remote_env_preview: BTreeMap<String, String>,
     remote_command: Option<String>,
     command: String,
     args: Vec<String>,
     public_args: Vec<String>,
+}
+
+fn remote_session_description(
+    description: Option<String>,
+    default_prefix: &str,
+    detail: &str,
+) -> String {
+    description
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("{default_prefix}: {detail}"))
 }
 
 impl SshService {
@@ -200,10 +211,18 @@ impl SshService {
     }
 
     async fn spawn_remote_session(&self, input: RemoteSessionSpawnInput) -> Result<SessionSummary> {
+        let generated_description = remote_session_description(
+            input.description.clone(),
+            "SSH session",
+            input
+                .remote_command
+                .as_deref()
+                .unwrap_or(&input.connection.target_summary),
+        );
         let summary = SessionSummary {
             session_id: crate::session::SessionId::new(),
             title: input.title,
-            description: input.description,
+            description: generated_description,
             command: "ssh".to_string(),
             args: input.public_args,
             cwd: None,

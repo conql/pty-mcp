@@ -18,6 +18,13 @@ use super::{
     },
 };
 
+fn connection_description(description: Option<String>, target: &SshTarget) -> Option<String> {
+    description
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| Some(format!("SSH connection: {}", target.summary())))
+}
+
 impl SshService {
     pub fn mount_feature_available(&self) -> bool {
         self.context.ssh_capabilities.sshfs.available
@@ -120,7 +127,7 @@ impl SshService {
         let summary = SshConnectionSummary {
             connection_id: SshConnectionId::new(),
             title: request.title,
-            description: request.description,
+            description: connection_description(request.description, &tentative_target),
             status,
             target_summary: tentative_target.summary(),
             target: tentative_target,

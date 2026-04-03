@@ -107,6 +107,30 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
         serde_json::json!(["plain", "ansi", "raw", null])
     );
 
+    let connect_schema = server
+        .tool_definitions()
+        .into_iter()
+        .find(|tool| tool.name == "ssh_connect")
+        .expect("ssh_connect tool")
+        .input_schema;
+    assert_eq!(
+        connect_schema["properties"]["auth_kind"]["enum"],
+        serde_json::json!(["ssh_agent", "identity_file", "config_alias", null])
+    );
+    assert_eq!(
+        connect_schema["anyOf"],
+        serde_json::json!([
+            { "required": ["host_alias"] },
+            { "required": ["host"] }
+        ])
+    );
+    let connect_required = connect_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(!connect_required.contains(&serde_json::json!("description")));
+
     Ok(())
 }
 
@@ -229,6 +253,12 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
 
     let ready = wait_for_read_match(&client, &spawned.session_id, "ready").await?;
     assert!(ready.lines.contains("ready"));
+    assert!(
+        ready
+            .line_items
+            .iter()
+            .any(|line| line.text.contains("ready"))
+    );
 
     let write_result = client
         .call_tool(
@@ -251,6 +281,12 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
     let echoed =
         wait_for_read_match(&client, &write_payload.session_id, "echo:hello from tool").await?;
     assert!(echoed.lines.contains("echo:hello from tool"));
+    assert!(
+        echoed
+            .line_items
+            .iter()
+            .any(|line| line.text.contains("echo:hello from tool"))
+    );
 
     let list_result = client
         .call_tool(CallToolRequestParams::new("pty_list"))

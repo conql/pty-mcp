@@ -7,6 +7,13 @@ use super::{
     types::{SshMountRequest, SshUnmountRequest, SshUnmountResult},
 };
 
+fn mount_description(description: Option<String>, remote_path: &str, local_path: &str) -> String {
+    description
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("SSH mount: {remote_path} -> {local_path}"))
+}
+
 impl SshService {
     pub async fn mount(&self, request: SshMountRequest) -> Result<crate::ssh::SshMountSummary> {
         let connection = self.require_ready_connection(&request.connection_id, "mounting")?;
@@ -36,7 +43,11 @@ impl SshService {
         let mount = crate::ssh::SshMountSummary {
             mount_id: crate::ssh::SshMountId::new(),
             title: request.title,
-            description: Some(request.description),
+            description: Some(mount_description(
+                request.description,
+                &validated.remote_path,
+                &validated.local_path.display().to_string(),
+            )),
             connection_id: connection.connection_id.clone(),
             status: crate::ssh::SshMountStatus::Mounting,
             backend,

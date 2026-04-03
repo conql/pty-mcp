@@ -109,7 +109,7 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
             backend: None,
             create_local_path: true,
             title: Some("Managed".to_string()),
-            description: "managed mount".to_string(),
+            description: Some("managed mount".to_string()),
         })
         .await?;
 
@@ -149,7 +149,7 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
             backend: None,
             create_local_path: false,
             title: Some("Explicit".to_string()),
-            description: "explicit mount".to_string(),
+            description: Some("explicit mount".to_string()),
         })
         .await?;
 
@@ -192,7 +192,7 @@ async fn ssh_mount_reports_capability_unavailable_when_sshfs_missing() -> anyhow
             backend: None,
             create_local_path: true,
             title: None,
-            description: "missing sshfs".to_string(),
+            description: Some("missing sshfs".to_string()),
         })
         .await
         .expect_err("mount should fail when sshfs is unavailable");
@@ -248,7 +248,7 @@ async fn ssh_mount_failures_are_recorded_on_mount_summary() -> anyhow::Result<()
             backend: None,
             create_local_path: true,
             title: None,
-            description: "failing mount".to_string(),
+            description: Some("failing mount".to_string()),
         })
         .await
         .expect_err("mount should fail");
@@ -299,7 +299,7 @@ async fn shutdown_unmounts_managed_mounts() -> anyhow::Result<()> {
             backend: None,
             create_local_path: true,
             title: None,
-            description: "shutdown cleanup mount".to_string(),
+            description: Some("shutdown cleanup mount".to_string()),
         })
         .await?;
 

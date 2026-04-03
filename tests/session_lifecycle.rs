@@ -20,7 +20,7 @@ async fn app_state_spawn_write_read_and_exit_lifecycle() -> anyhow::Result<()> {
             cwd: None,
             env: None,
             title: Some("interactive".to_string()),
-            description: "interactive lifecycle".to_string(),
+            description: Some("interactive lifecycle".to_string()),
         })
         .await?;
 
@@ -74,7 +74,7 @@ async fn app_state_kill_without_cleanup_retains_session_and_logs() -> anyhow::Re
             cwd: None,
             env: None,
             title: None,
-            description: "kill without cleanup".to_string(),
+            description: Some("kill without cleanup".to_string()),
         })
         .await?;
 
@@ -127,7 +127,7 @@ async fn app_state_kill_with_cleanup_removes_session_and_logs() -> anyhow::Resul
             cwd: None,
             env: None,
             title: None,
-            description: "kill with cleanup".to_string(),
+            description: Some("kill with cleanup".to_string()),
         })
         .await?;
 
@@ -164,7 +164,7 @@ async fn app_state_wait_reports_timeout_then_completion() -> anyhow::Result<()> 
             cwd: None,
             env: None,
             title: None,
-            description: "wait lifecycle".to_string(),
+            description: Some("wait lifecycle".to_string()),
         })
         .await?;
 
@@ -205,7 +205,7 @@ async fn app_state_shutdown_cleans_up_running_sessions() -> anyhow::Result<()> {
             cwd: None,
             env: None,
             title: None,
-            description: "shutdown cleanup".to_string(),
+            description: Some("shutdown cleanup".to_string()),
         })
         .await?;
 

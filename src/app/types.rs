@@ -12,7 +12,7 @@ pub struct SpawnSessionRequest {
     pub cwd: Option<String>,
     pub env: Option<Map<String, Value>>,
     pub title: Option<String>,
-    pub description: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +51,7 @@ pub struct SshSessionSpawnRequest {
     pub interactive: bool,
     pub login: bool,
     pub title: Option<String>,
-    pub description: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ pub struct SshExecRequest {
     pub shell: Option<String>,
     pub login: bool,
     pub title: Option<String>,
-    pub description: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,7 +97,7 @@ pub struct SshMountRequest {
     pub backend: Option<crate::ssh::SshMountBackend>,
     pub create_local_path: bool,
     pub title: Option<String>,
-    pub description: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
