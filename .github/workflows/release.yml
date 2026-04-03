@@ -95,6 +95,35 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
+  crates-io:
+    name: Publish crate to crates.io
+    runs-on: ubuntu-24.04
+    needs: github-release
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Authenticate to crates.io via Trusted Publishing
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
+
   homebrew-tap:
     name: Update Homebrew tap
     runs-on: ubuntu-24.04
