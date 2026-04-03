@@ -276,6 +276,14 @@ PTY_MCP_SSH_MANAGED_MOUNT_ROOT = "/tmp/pty-mcp-mounts"
 cargo build
 ```
 
+## Q&A
+
+### If this is already the era of skills, why still use MCP?
+
+Because PTY management needs the lifecycle of background processes to stay bound to the agent session, so those processes do not get detached and turn into orphan processes.
+
+In that setup, MCP is a natural fit. Its lifecycle is already aligned with the session lifecycle, and it can act as the parent process for all managed background processes. That makes it a particularly good foundation for persistent PTY workflows.
+
 ## Acknowledgements
 
 Thanks to [shekohex/opencode-pty](https://github.com/shekohex/opencode-pty) for sharing a thoughtful open-source PTY management implementation and for providing useful prior art while shaping `pty-mcp`.
