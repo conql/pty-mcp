@@ -80,12 +80,12 @@ pub(crate) fn remote_command_failed(
         connection_id.as_str(),
         path,
         output.status.code(),
-        stderr_preview(&stderr),
-        stderr_preview(&stdout)
+        output_preview(&stderr),
+        output_preview(&stdout)
     )
 }
 
-pub(crate) fn stderr_preview(output: &str) -> String {
+pub(crate) fn output_preview(output: &str) -> String {
     let trimmed = output.trim();
     if trimmed.is_empty() {
         return String::new();

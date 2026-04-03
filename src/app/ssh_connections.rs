@@ -38,20 +38,22 @@ impl SshService {
             );
         }
 
+        let host_alias = request
+            .host_alias
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+
         let tentative_target = SshTarget {
-            host_alias: request
-                .host_alias
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string),
+            host_alias: host_alias.clone(),
             host: request
                 .host
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToString::to_string)
-                .or_else(|| request.host_alias.clone())
+                .or_else(|| host_alias.clone())
                 .unwrap_or_default(),
             user: request
                 .user
@@ -529,6 +531,49 @@ mod tests {
             .unwrap();
 
         assert!(!first.reused);
+        assert!(second.reused);
+        assert_eq!(
+            first.connection.connection_id,
+            second.connection.connection_id
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_normalizes_host_alias_when_used_as_host_fallback() {
+        let app = app_with_true_ssh();
+
+        let first = app
+            .ssh()
+            .connect(super::super::types::SshConnectRequest {
+                host_alias: Some(" devbox ".into()),
+                host: None,
+                user: Some("alice".into()),
+                port: Some(22),
+                auth_kind: Some(SshAuthKind::SshAgent),
+                identity_path: None,
+                title: None,
+                description: Some("first".into()),
+                verify_host_key: true,
+            })
+            .await
+            .unwrap();
+        let second = app
+            .ssh()
+            .connect(super::super::types::SshConnectRequest {
+                host_alias: Some("devbox".into()),
+                host: None,
+                user: Some("alice".into()),
+                port: Some(22),
+                auth_kind: Some(SshAuthKind::SshAgent),
+                identity_path: None,
+                title: None,
+                description: Some("second".into()),
+                verify_host_key: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(first.connection.target.host, "devbox");
         assert!(second.reused);
         assert_eq!(
             first.connection.connection_id,

@@ -122,8 +122,19 @@ impl SshService {
         match result {
             Ok(()) => {
                 let cleanup_local_path = if request.cleanup_local_path {
-                    self.context
-                        .cleanup_mount_local_path_if_allowed(&mount, &context)?
+                    match self
+                        .context
+                        .cleanup_mount_local_path_if_allowed(&mount, &context)
+                    {
+                        Ok(cleaned) => cleaned,
+                        Err(error) => {
+                            let mut failed = mount;
+                            failed.status = crate::ssh::SshMountStatus::Failed;
+                            failed.last_error = Some(error.to_string());
+                            self.context.ssh_registry.upsert_mount(failed);
+                            return Err(error);
+                        }
+                    }
                 } else {
                     false
                 };
@@ -216,5 +227,78 @@ mod tests {
             .unwrap();
         assert!(removed);
         assert!(!base.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unmount_marks_mount_failed_when_cleanup_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let sandbox = std::env::temp_dir().join(format!("pty-mcp-mount-{}", uuid::Uuid::new_v4()));
+        let local_path = sandbox.join("mount");
+        std::fs::create_dir_all(&local_path).unwrap();
+
+        let umount_bin = sandbox.join("umount");
+        std::fs::write(&umount_bin, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = std::fs::metadata(&umount_bin).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&umount_bin, permissions).unwrap();
+
+        let mut config = Config::default();
+        config.ssh.umount_bin_path = Some(umount_bin);
+        let app = super::super::AppState::new(config);
+
+        let mount = crate::ssh::SshMountSummary {
+            mount_id: crate::ssh::SshMountId::new(),
+            title: None,
+            description: None,
+            connection_id: crate::ssh::SshConnectionId::new(),
+            status: crate::ssh::SshMountStatus::Mounted,
+            backend: crate::ssh::SshMountBackend::Sshfs,
+            local_path: local_path.display().to_string(),
+            remote_path: "/remote".into(),
+            read_only: false,
+            mounted_at: Utc::now(),
+            last_error: None,
+        };
+        app.context.ssh_registry.upsert_mount(mount.clone());
+        app.context.remember_mount_runtime_context(
+            &mount.mount_id,
+            SshMountRuntimeContext {
+                managed_path: true,
+                created_local_path: true,
+            },
+        );
+
+        let parent_permissions = std::fs::metadata(&sandbox).unwrap().permissions();
+        let mut readonly_permissions = parent_permissions.clone();
+        readonly_permissions.set_mode(0o500);
+        std::fs::set_permissions(&sandbox, readonly_permissions).unwrap();
+
+        let result = app
+            .ssh()
+            .unmount(SshUnmountRequest {
+                mount_id: mount.mount_id.clone(),
+                force: false,
+                cleanup_local_path: true,
+            })
+            .await;
+
+        let mut restored_permissions = parent_permissions;
+        restored_permissions.set_mode(0o700);
+        std::fs::set_permissions(&sandbox, restored_permissions).unwrap();
+
+        assert!(result.is_err());
+        let updated = app.context.ssh_registry.get_mount(&mount.mount_id).unwrap();
+        assert_eq!(updated.status, crate::ssh::SshMountStatus::Failed);
+        assert!(
+            updated
+                .last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("failed to remove")
+        );
+
+        std::fs::remove_dir_all(&sandbox).unwrap();
     }
 }
