@@ -517,6 +517,7 @@ impl PtyMcpServer {
             || request.output_view.is_some();
         match self
             .app()
+            .local()
             .spawn_session(SpawnSessionRequest {
                 command: request.command,
                 args: request.args,
@@ -547,8 +548,8 @@ impl PtyMcpServer {
 
                 let latest = self
                     .app()
-                    .registry()
-                    .get(&summary.session_id)
+                    .local()
+                    .get_session(&summary.session_id)
                     .unwrap_or(summary);
 
                 structured(&PtySpawnResponse {
@@ -576,6 +577,7 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
+            .local()
             .write_session(
                 &request.session_id,
                 &request.data,
@@ -602,7 +604,7 @@ impl PtyMcpServer {
         &self,
         Parameters(request): Parameters<PtyReadRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        match self.app().read_session(
+        match self.app().local().read_session(
             &request.session_id,
             &BufferReadRequest {
                 offset: request.offset.unwrap_or(0),
@@ -622,8 +624,8 @@ impl PtyMcpServer {
             Ok(page) => {
                 let status = self
                     .app()
-                    .registry()
-                    .get(&request.session_id)
+                    .local()
+                    .get_session(&request.session_id)
                     .map(|summary| summary.status)
                     .unwrap_or(SessionStatus::Exited);
                 structured(&read_response_from_page(request.session_id, status, page))
@@ -654,7 +656,8 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
-            .ssh_connect(AppSshConnectRequest {
+            .ssh()
+            .connect(AppSshConnectRequest {
                 host_alias: request.host_alias,
                 host: request.host,
                 user: request.user,
@@ -685,7 +688,7 @@ impl PtyMcpServer {
         execution(task_support = "optional")
     )]
     pub async fn ssh_list(&self) -> Json<SshListResponse> {
-        let result = self.app().ssh_list();
+        let result = self.app().ssh().list();
         Json(SshListResponse {
             connections: result.connections,
             mounts: result.mounts,
@@ -706,7 +709,8 @@ impl PtyMcpServer {
             || request.output_view.is_some();
         match self
             .app()
-            .ssh_session_spawn(AppSshSessionSpawnRequest {
+            .ssh()
+            .session_spawn(AppSshSessionSpawnRequest {
                 connection_id: request.connection_id.clone(),
                 command: request.command,
                 args: request.args,
@@ -745,8 +749,8 @@ impl PtyMcpServer {
 
                 let latest = self
                     .app()
-                    .registry()
-                    .get(&spawned.session_id)
+                    .local()
+                    .get_session(&spawned.session_id)
                     .unwrap_or(spawned);
 
                 structured(&SshSessionSpawnResponse {
@@ -785,7 +789,8 @@ impl PtyMcpServer {
             resolve_buffer_view(request.output_view.clone().unwrap_or(ReadView::Plain));
         match self
             .app()
-            .ssh_exec(AppSshExecRequest {
+            .ssh()
+            .exec(AppSshExecRequest {
                 connection_id: request.connection_id.clone(),
                 script: request.script,
                 cwd: request.cwd,
@@ -801,6 +806,7 @@ impl PtyMcpServer {
                 let wait_outcome = if let Some(timeout_ms) = wait_for_completion_ms {
                     match self
                         .app()
+                        .local()
                         .wait_session(
                             &spawned.session_id,
                             Some(std::time::Duration::from_millis(timeout_ms)),
@@ -818,8 +824,8 @@ impl PtyMcpServer {
 
                 let latest = self
                     .app()
-                    .registry()
-                    .get(&spawned.session_id)
+                    .local()
+                    .get_session(&spawned.session_id)
                     .unwrap_or(spawned);
 
                 let initial_output = if should_capture_initial_output {
@@ -881,7 +887,8 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
-            .ssh_run(AppSshRunRequest {
+            .ssh()
+            .run(AppSshRunRequest {
                 connection_id: request.connection_id.clone(),
                 script: request.script,
                 cwd: request.cwd,
@@ -916,7 +923,8 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
-            .ssh_mount(AppSshMountRequest {
+            .ssh()
+            .mount(AppSshMountRequest {
                 connection_id: request.connection_id,
                 remote_path: request.remote_path,
                 local_path: request.local_path,
@@ -952,7 +960,8 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
-            .ssh_unmount(AppSshUnmountRequest {
+            .ssh()
+            .unmount(AppSshUnmountRequest {
                 mount_id: request.mount_id,
                 force: request.force.unwrap_or(false),
                 cleanup_local_path: request.cleanup_local_path.unwrap_or(false),
@@ -981,7 +990,8 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
-            .ssh_disconnect(AppSshDisconnectRequest {
+            .ssh()
+            .disconnect(AppSshDisconnectRequest {
                 connection_id: request.connection_id,
                 force: request.force.unwrap_or(false),
                 cleanup_mounts: request.cleanup_mounts.unwrap_or(false),
@@ -1010,7 +1020,8 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
-            .ssh_read_file(
+            .ssh()
+            .read_file(
                 &request.connection_id,
                 &request.path,
                 request.max_bytes.unwrap_or(128 * 1024),
@@ -1038,7 +1049,8 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
-            .ssh_write_file(
+            .ssh()
+            .write_file(
                 &request.connection_id,
                 &request.path,
                 &request.content,
@@ -1068,7 +1080,8 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
-            .ssh_list_directory(
+            .ssh()
+            .list_directory(
                 &request.connection_id,
                 &request.path,
                 request.include_hidden.unwrap_or(false),
@@ -1110,7 +1123,8 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
-            .ssh_mkdir(
+            .ssh()
+            .mkdir(
                 &request.connection_id,
                 &request.path,
                 request.parents.unwrap_or(false),
@@ -1137,6 +1151,7 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
+            .local()
             .kill_session(
                 &request.session_id,
                 request.signal.unwrap_or(SignalKind::Sigterm),
@@ -1165,6 +1180,7 @@ impl PtyMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .app()
+            .local()
             .wait_session(
                 &request.session_id,
                 request.timeout_ms.map(std::time::Duration::from_millis),
@@ -1187,7 +1203,7 @@ impl PtyMcpServer {
 }
 
 pub fn seed_placeholder_session(app: &AppState, session: SessionSummary) {
-    app.registry().insert(session);
+    app.local().seed_session(session);
 }
 
 fn resolve_buffer_view(view: ReadView) -> BufferView {
@@ -1248,7 +1264,7 @@ async fn capture_initial_output(
     let started = tokio::time::Instant::now();
 
     loop {
-        let page = app.read_session(
+        let page = app.local().read_session(
             session_id,
             &BufferReadRequest {
                 offset: 0,
@@ -1272,11 +1288,11 @@ async fn capture_initial_output(
 }
 
 fn enrich_sessions_with_ssh_context(app: &AppState) -> Vec<SessionSummary> {
-    let mut sessions = app.registry().list();
+    let mut sessions = app.local().list_sessions();
     let mut relation_index = std::collections::BTreeMap::<SessionId, SshConnectionSummary>::new();
 
-    for connection in app.ssh_list_connections() {
-        if let Ok(relations) = app.ssh_connection_relations(&connection.connection_id) {
+    for connection in app.ssh().list_connections() {
+        if let Ok(relations) = app.ssh().connection_relations(&connection.connection_id) {
             for session_id in relations.session_ids {
                 relation_index.insert(session_id, connection.clone());
             }

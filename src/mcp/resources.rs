@@ -79,7 +79,7 @@ pub fn list_resources(app: &AppState) -> ListResourcesResult {
         );
     }
 
-    for session in app.registry().list() {
+    for session in app.local().list_sessions() {
         let id = session.session_id.as_str();
         resources.push(
             RawResource::new(format!("pty://sessions/{id}"), format!("session-{id}"))
@@ -110,7 +110,7 @@ pub fn list_resources(app: &AppState) -> ListResourcesResult {
         );
     }
 
-    for connection in app.ssh_list_connections() {
+    for connection in app.ssh().list_connections() {
         let id = connection.connection_id.as_str();
         resources.push(
             RawResource::new(
@@ -125,7 +125,7 @@ pub fn list_resources(app: &AppState) -> ListResourcesResult {
     }
 
     if mount_feature_available {
-        for mount in app.ssh_list_mounts() {
+        for mount in app.ssh().list_mounts() {
             let id = mount.mount_id.as_str();
             resources.push(
                 RawResource::new(format!("{SSH_MOUNTS_URI}/{id}"), format!("ssh-mount-{id}"))
@@ -184,12 +184,12 @@ pub fn list_resource_templates(app: &AppState) -> ListResourceTemplatesResult {
 
 pub fn read_resource(app: &AppState, uri: &str) -> Result<ReadResourceResult, ErrorData> {
     let contents = match uri {
-        SESSIONS_URI => json_contents(uri, json!({ "sessions": app.registry().list() })),
+        SESSIONS_URI => json_contents(uri, json!({ "sessions": app.local().list_sessions() })),
         SSH_CONNECTIONS_URI => {
-            json_contents(uri, json!({ "connections": app.ssh_list_connections() }))
+            json_contents(uri, json!({ "connections": app.ssh().list_connections() }))
         }
         SSH_MOUNTS_URI if app.ssh_mount_feature_available() => {
-            json_contents(uri, json!({ "mounts": app.ssh_list_mounts() }))
+            json_contents(uri, json!({ "mounts": app.ssh().list_mounts() }))
         }
         SSH_MOUNT_SETUP_URI => markdown_contents(uri, SSH_MOUNT_SETUP_GUIDE),
         _ if uri.starts_with("pty://sessions/") => read_session_resource(app, uri)?,
@@ -216,8 +216,8 @@ fn read_session_resource(app: &AppState, uri: &str) -> Result<ResourceContents, 
     let remainder = segments.next();
 
     let session = app
-        .registry()
-        .list()
+        .local()
+        .list_sessions()
         .into_iter()
         .find(|summary| summary.session_id.as_str() == session_id)
         .ok_or_else(resource_not_found)?;
@@ -300,7 +300,8 @@ fn read_ssh_connection_resource(app: &AppState, uri: &str) -> Result<ResourceCon
     let connection_id =
         crate::ssh::SshConnectionId::from_str(connection_id).map_err(|_| resource_not_found())?;
     let connection = app
-        .ssh_get_connection(&connection_id)
+        .ssh()
+        .get_connection(&connection_id)
         .ok_or_else(resource_not_found)?;
 
     Ok(json_contents(
@@ -316,7 +317,8 @@ fn read_ssh_mount_resource(app: &AppState, uri: &str) -> Result<ResourceContents
         .ok_or_else(resource_not_found)?;
     let mount_id = crate::ssh::SshMountId::from_str(mount_id).map_err(|_| resource_not_found())?;
     let mount = app
-        .ssh_get_mount(&mount_id)
+        .ssh()
+        .get_mount(&mount_id)
         .ok_or_else(resource_not_found)?;
 
     Ok(json_contents(
