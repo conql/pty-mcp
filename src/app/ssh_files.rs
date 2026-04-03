@@ -234,6 +234,7 @@ impl SshService {
                     login: false,
                 },
                 None,
+                None,
             )
             .await
             .map_err(|error| {

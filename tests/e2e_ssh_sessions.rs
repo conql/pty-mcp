@@ -11,7 +11,7 @@ use std::{
 use anyhow::{Result, ensure};
 use pty_mcp::{
     mcp::tools::{
-        PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse,
+        PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse, SshExecResponse,
         SshSessionSpawnResponse,
     },
     session::SessionTransport,
@@ -83,13 +83,23 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
                 "cwd": remote_home_cwd,
                 "env": { "TERM": "xterm-256color" },
                 "interactive": false,
-                "description": "remote session e2e"
+                "description": "remote session e2e",
+                "wait_for_output_ms": 300,
+                "output_limit": 50,
+                "output_view": "plain"
             }),
         )
         .await?;
     ensure!(spawned.transport == SessionTransport::Ssh);
     ensure!(spawned.remote_cwd.as_deref() == Some(remote_home_cwd.as_str()));
     ensure!(spawned.target_summary.as_deref() == Some("alice@devbox"));
+    ensure!(spawned.initial_output.is_some());
+    ensure!(spawned.initial_output.as_ref().is_some_and(|snapshot| {
+        snapshot
+            .lines
+            .iter()
+            .any(|line| line.text.contains(&expected_pwd))
+    }));
 
     harness
         .wait_until("ssh session exit", || async {
@@ -138,7 +148,7 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
     ensure!(spawned_session.target_summary.as_deref() == Some("alice@devbox"));
 
     let exec_spawned = harness
-        .call_tool_typed::<SshSessionSpawnResponse>(
+        .call_tool_typed::<SshExecResponse>(
             "ssh_exec",
             json!({
                 "connection_id": connected.connection_id,

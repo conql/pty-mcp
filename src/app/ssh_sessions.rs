@@ -148,6 +148,7 @@ impl SshService {
                     login: request.login,
                 },
                 request.timeout_ms.map(Duration::from_millis),
+                request.max_output_bytes,
             )
             .await?;
 

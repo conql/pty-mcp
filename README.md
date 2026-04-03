@@ -132,9 +132,15 @@ flowchart LR
 - `ssh_connect`: create or reuse an SSH connection handle
 - `ssh_list`: list SSH connections and mounts
 - `ssh_session_spawn`: start a remote PTY session over an existing SSH connection
+  - optional `wait_for_output_ms`: wait briefly for initial remote PTY output and return it inline as `initial_output`
+  - optional `output_limit`: cap how much remote PTY output is captured and included in `initial_output`
+  - optional `output_view`: choose the format of captured `initial_output` (`plain`, `ansi`, or `raw`), with the same semantics as `pty_read` and initial output capture
 - `ssh_run`: run a one-shot remote script and return `stdout`, `stderr`, and exit status directly
+  - optional `max_output_bytes`: cap combined captured output, default `262144`
 - `ssh_exec`: run a remote script over an existing SSH connection
   - use this when you want the result attached to a PTY session for later `pty_wait` / `pty_read`
+  - optional `wait_for_completion_ms`: wait briefly for the script to finish and return completion state, exit code, and `initial_output` inline
+  - if the script does not finish within that window, use `pty_wait` and `pty_read` with the returned `session_id`
 - `ssh_read_file`: read a UTF-8 text file from the remote host
 - `ssh_write_file`: write a UTF-8 text file to the remote host
 - `ssh_list_dir`: list one remote directory level

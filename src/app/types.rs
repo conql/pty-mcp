@@ -75,6 +75,7 @@ pub struct SshRunRequest {
     pub shell: Option<String>,
     pub login: bool,
     pub timeout_ms: Option<u64>,
+    pub max_output_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
