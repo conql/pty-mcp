@@ -73,7 +73,7 @@ impl ServerHandler for PtyMcpServer {
             format!(
                 "Manage PTY sessions through tools. Use pty_spawn, pty_write, pty_read, \
                  pty_list, pty_kill, and pty_wait for the main PTY workflow. Use ssh_connect, \
-                 ssh_session_spawn, ssh_exec, ssh_read_file, ssh_write_file, ssh_list_dir, \
+                 ssh_session_spawn, ssh_exec, ssh_run, ssh_read_file, ssh_write_file, ssh_list_dir, \
                  ssh_mkdir{ssh_mount_tools} ssh_list, and ssh_disconnect to manage SSH \
                  connections, remote sessions, remote files, and mount summaries. Resources \
                  expose read-only snapshots, including pty://sessions plus ssh://connections{ssh_mount_resources}. \

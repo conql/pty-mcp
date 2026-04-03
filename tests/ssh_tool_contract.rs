@@ -5,8 +5,8 @@ use pty_mcp::{
     mcp::tools::{
         PtyListResponse, PtyReadResponse, PtyWaitResponse, SshConnectResponse,
         SshDisconnectResponse, SshExecResponse, SshListDirResponse, SshListResponse,
-        SshMkdirResponse, SshMountResponse, SshReadFileResponse, SshSessionSpawnResponse,
-        SshWriteFileResponse,
+        SshMkdirResponse, SshMountResponse, SshReadFileResponse, SshRunResponse,
+        SshSessionSpawnResponse, SshWriteFileResponse,
     },
     ssh::{
         SshConnectionStatus, SshMountBackend, SshMountId, SshMountStatus, SshMountSummary,
@@ -297,6 +297,10 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
         .iter()
         .find(|tool| tool.name == "ssh_exec")
         .expect("ssh_exec should be registered");
+    let run = tool_defs
+        .iter()
+        .find(|tool| tool.name == "ssh_run")
+        .expect("ssh_run should be registered");
     let mount = tool_defs
         .iter()
         .find(|tool| tool.name == "ssh_mount")
@@ -330,6 +334,7 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
     assert_eq!(list.task_support(), TaskSupport::Optional);
     assert_eq!(session_spawn.task_support(), TaskSupport::Optional);
     assert_eq!(exec.task_support(), TaskSupport::Optional);
+    assert_eq!(run.task_support(), TaskSupport::Optional);
     assert_eq!(mount.task_support(), TaskSupport::Optional);
     assert_eq!(read_file.task_support(), TaskSupport::Optional);
     assert_eq!(write_file.task_support(), TaskSupport::Optional);
@@ -345,6 +350,13 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
         .expect("ssh_exec should expose required fields");
     assert!(exec_required.contains(&serde_json::json!("connection_id")));
     assert!(exec_required.contains(&serde_json::json!("script")));
+    let run_required = run
+        .input_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("ssh_run should expose required fields");
+    assert!(run_required.contains(&serde_json::json!("connection_id")));
+    assert!(run_required.contains(&serde_json::json!("script")));
     assert!(
         !exec
             .input_schema
@@ -873,6 +885,144 @@ async fn ssh_exec_runs_shell_snippets_and_session_spawn_keeps_argv_literal() -> 
     wait_for_session_exit(&client, &argv_spawned.session_id).await?;
     let argv_output = read_session_output(&client, &argv_spawned.session_id).await?;
     assert!(argv_output.lines.lines().any(|line| line.trim() == "$HOME"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_run_returns_direct_output_without_creating_session() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("ssh_run_direct_output")?;
+    let ssh_path = sandbox.path.join("ssh");
+    write_fake_executable(
+        &ssh_path,
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nsh -lc \"$last\"\n",
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    let app = Arc::new(AppState::new(config));
+    let server = PtyMcpServer::new(app);
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let connected = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_connect").with_arguments(
+                serde_json::json!({
+                    "host_alias": "devbox",
+                    "user": "alice",
+                    "description": "ssh run contract"
+                })
+                .as_object()
+                .expect("connect args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshConnectResponse>()?;
+
+    let run = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_run").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "script": "printf 'out\\n'; printf 'err\\n' >&2",
+                })
+                .as_object()
+                .expect("ssh_run args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshRunResponse>()?;
+
+    assert!(run.success);
+    assert_eq!(run.exit_code, Some(0));
+    assert_eq!(run.exit_signal, None);
+    assert_eq!(run.stdout, "out\n");
+    assert_eq!(run.stderr, "err\n");
+
+    let listed = client
+        .call_tool(
+            CallToolRequestParams::new("pty_list").with_arguments(
+                serde_json::json!({})
+                    .as_object()
+                    .expect("pty_list args object")
+                    .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<PtyListResponse>()?;
+    assert!(listed.sessions.is_empty());
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_run_enforces_max_output_bytes() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("ssh_run_output_limit")?;
+    let ssh_path = sandbox.path.join("ssh");
+    write_fake_executable(
+        &ssh_path,
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nsh -lc \"$last\"\n",
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    let app = Arc::new(AppState::new(config));
+    let server = PtyMcpServer::new(app);
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let connected = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_connect").with_arguments(
+                serde_json::json!({
+                    "host_alias": "devbox",
+                    "user": "alice",
+                    "description": "ssh run output limit contract"
+                })
+                .as_object()
+                .expect("connect args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshConnectResponse>()?;
+
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_run").with_arguments(
+                serde_json::json!({
+                    "connection_id": connected.connection_id,
+                    "script": "printf '1234567890'",
+                    "max_output_bytes": 4
+                })
+                .as_object()
+                .expect("ssh_run args object")
+                .clone(),
+            ),
+        )
+        .await?;
+    assert_eq!(result.is_error, Some(true));
+    let structured = result.structured_content.expect("structured error");
+    let message = structured["message"].as_str().expect("error message");
+    assert!(message.contains("ssh command output exceeded max_output_bytes"));
+    assert!(message.contains("limit=4"));
 
     client.cancel().await?;
     server_handle.await??;

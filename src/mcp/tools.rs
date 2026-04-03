@@ -10,7 +10,8 @@ use crate::{
     app::{
         SshConnectRequest as AppSshConnectRequest, SshDirectoryEntryType,
         SshDisconnectRequest as AppSshDisconnectRequest, SshExecRequest as AppSshExecRequest,
-        SshMountRequest as AppSshMountRequest, SshSessionSpawnRequest as AppSshSessionSpawnRequest,
+        SshMountRequest as AppSshMountRequest, SshRunRequest as AppSshRunRequest,
+        SshSessionSpawnRequest as AppSshSessionSpawnRequest,
         SshUnmountRequest as AppSshUnmountRequest,
     },
     buffer::{BufferReadPage, BufferReadRequest, BufferView},
@@ -232,6 +233,25 @@ pub struct SshExecRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshRunRequest {
+    pub connection_id: SshConnectionId,
+    pub script: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<bool>,
+    #[schemars(description = "Maximum combined stdout+stderr bytes to capture. Default: 262144.")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshSessionSpawnResponse {
     pub connection_id: SshConnectionId,
     pub session_id: SessionId,
@@ -265,6 +285,18 @@ pub struct SshExecResponse {
     pub exit_signal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_output: Option<PtyOutputSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshRunResponse {
+    pub connection_id: SshConnectionId,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_signal: Option<String>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -690,7 +722,7 @@ impl PtyMcpServer {
         {
             Ok(spawned) => {
                 let initial_output = if should_capture_initial_output {
-                    capture_initial_output(
+                    match capture_initial_output(
                         self.app(),
                         &spawned.session_id,
                         request.wait_for_output_ms.unwrap_or(0),
@@ -701,7 +733,12 @@ impl PtyMcpServer {
                         resolve_buffer_view(request.output_view.unwrap_or(ReadView::Plain)),
                     )
                     .await
-                    .map_err(|error| ErrorData::internal_error(error.to_string(), None))?
+                    {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => {
+                            return Ok::<CallToolResult, ErrorData>(tool_execution_error(error));
+                        }
+                    }
                 } else {
                     None
                 };
@@ -786,10 +823,15 @@ impl PtyMcpServer {
                     .unwrap_or(spawned);
 
                 let initial_output = if should_capture_initial_output {
+                    let capture_wait_ms = if wait_outcome.is_some() {
+                        0
+                    } else {
+                        wait_for_completion_ms.unwrap_or(0)
+                    };
                     match capture_initial_output(
                         self.app(),
                         &latest.session_id,
-                        wait_for_completion_ms.unwrap_or(0),
+                        capture_wait_ms,
                         output_limit,
                         output_view,
                     )
@@ -824,6 +866,41 @@ impl PtyMcpServer {
                     initial_output,
                 })
             }
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
+        }
+    }
+
+    #[tool(
+        name = "ssh_run",
+        description = "Run a one-shot shell script on an existing SSH connection and return stdout, stderr, and exit status directly.",
+        execution(task_support = "optional")
+    )]
+    pub async fn ssh_run(
+        &self,
+        Parameters(request): Parameters<SshRunRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match self
+            .app()
+            .ssh_run(AppSshRunRequest {
+                connection_id: request.connection_id.clone(),
+                script: request.script,
+                cwd: request.cwd,
+                env: request.env,
+                shell: request.shell,
+                login: request.login.unwrap_or(false),
+                max_output_bytes: request.max_output_bytes,
+                timeout_ms: request.timeout_ms,
+            })
+            .await
+        {
+            Ok(result) => structured(&SshRunResponse {
+                connection_id: result.connection_id,
+                success: result.success,
+                exit_code: result.exit_code,
+                exit_signal: result.exit_signal,
+                stdout: result.stdout,
+                stderr: result.stderr,
+            }),
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
     }

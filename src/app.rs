@@ -2,6 +2,8 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use chrono::Utc;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::Output;
 use std::sync::RwLock;
@@ -85,6 +87,28 @@ pub struct SshExecRequest {
     pub login: bool,
     pub title: Option<String>,
     pub description: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshRunRequest {
+    pub connection_id: SshConnectionId,
+    pub script: String,
+    pub cwd: Option<String>,
+    pub env: Option<Map<String, Value>>,
+    pub shell: Option<String>,
+    pub login: bool,
+    pub timeout_ms: Option<u64>,
+    pub max_output_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshRunResult {
+    pub connection_id: SshConnectionId,
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub exit_signal: Option<String>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1003,6 +1027,92 @@ impl AppState {
             .expect("session disappeared after ssh_exec"))
     }
 
+    pub async fn ssh_run(&self, request: SshRunRequest) -> Result<SshRunResult> {
+        let connection = self
+            .ssh_registry
+            .get_connection(&request.connection_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "ssh connection not found: connection_id={}",
+                    request.connection_id.as_str()
+                )
+            })?;
+
+        if !matches!(
+            connection.status,
+            SshConnectionStatus::Ready | SshConnectionStatus::Degraded
+        ) {
+            bail!(
+                "ssh connection is not ready for remote command execution: connection_id={} status={:?}",
+                request.connection_id.as_str(),
+                connection.status
+            );
+        }
+
+        let context = self.runtime_context_for_connection(&connection);
+        let ssh_bin = self
+            .ssh_config
+            .resolved_ssh_bin_path()
+            .or_else(|| self.ssh_capabilities.ssh.path.as_ref().map(PathBuf::from))
+            .ok_or_else(|| anyhow!("ssh binary path could not be resolved"))?;
+
+        let remote_env = normalize_remote_env_preview(request.env.as_ref())?;
+        let remote_cwd = request
+            .cwd
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        if remote_cwd
+            .as_deref()
+            .is_some_and(|cwd| !is_valid_remote_cwd(cwd))
+        {
+            bail!("remote cwd must be an absolute path or home-relative path: cwd={remote_cwd:?}");
+        }
+
+        let remote_script = request.script.trim().to_string();
+        if remote_script.is_empty() {
+            bail!("remote script cannot be empty");
+        }
+
+        let output = self
+            .ssh_runtime
+            .exec_capture(
+                SshExecPlanRequest {
+                    ssh_bin_path: Some(ssh_bin),
+                    target: connection.target.clone(),
+                    auth_kind: context.auth_kind,
+                    identity_path: context.identity_path.clone(),
+                    verify_host_key: context.verify_host_key,
+                    script: remote_script,
+                    cwd: remote_cwd,
+                    env: remote_env,
+                    shell: request.shell,
+                    login: request.login,
+                },
+                request.timeout_ms.map(std::time::Duration::from_millis),
+                Some(validate_ssh_run_max_output_bytes(
+                    request.max_output_bytes.unwrap_or(256 * 1024),
+                )?),
+            )
+            .await
+            .map_err(map_ssh_runtime_error)?;
+
+        #[cfg(unix)]
+        let exit_signal = output.status.signal().map(|signal| signal.to_string());
+        #[cfg(not(unix))]
+        let exit_signal = None;
+
+        Ok(SshRunResult {
+            connection_id: request.connection_id,
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            exit_signal,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+
     pub async fn ssh_read_file(
         &self,
         connection_id: &SshConnectionId,
@@ -1549,6 +1659,7 @@ impl AppState {
                     login: false,
                 },
                 None,
+                None,
             )
             .await
             .map_err(map_ssh_runtime_error)
@@ -1656,6 +1767,18 @@ fn validate_remote_write_size(content: &str) -> Result<()> {
         "ssh_write_file content must be at most 262144 bytes"
     );
     Ok(())
+}
+
+fn validate_ssh_run_max_output_bytes(max_output_bytes: usize) -> Result<usize> {
+    ensure!(
+        max_output_bytes > 0,
+        "ssh_run max_output_bytes must be greater than zero"
+    );
+    ensure!(
+        max_output_bytes <= 1024 * 1024,
+        "ssh_run max_output_bytes must be at most 1048576"
+    );
+    Ok(max_output_bytes)
 }
 
 fn parse_file_too_large_marker(stderr: &str) -> Option<usize> {
