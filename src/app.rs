@@ -98,6 +98,7 @@ pub struct SshRunRequest {
     pub shell: Option<String>,
     pub login: bool,
     pub timeout_ms: Option<u64>,
+    pub max_output_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1090,15 +1091,23 @@ impl AppState {
                     login: request.login,
                 },
                 request.timeout_ms.map(std::time::Duration::from_millis),
+                Some(validate_ssh_run_max_output_bytes(
+                    request.max_output_bytes.unwrap_or(256 * 1024),
+                )?),
             )
             .await
             .map_err(map_ssh_runtime_error)?;
+
+        #[cfg(unix)]
+        let exit_signal = output.status.signal().map(|signal| signal.to_string());
+        #[cfg(not(unix))]
+        let exit_signal = None;
 
         Ok(SshRunResult {
             connection_id: request.connection_id,
             success: output.status.success(),
             exit_code: output.status.code(),
-            exit_signal: output.status.signal().map(|signal| signal.to_string()),
+            exit_signal,
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
@@ -1650,6 +1659,7 @@ impl AppState {
                     login: false,
                 },
                 None,
+                None,
             )
             .await
             .map_err(map_ssh_runtime_error)
@@ -1757,6 +1767,18 @@ fn validate_remote_write_size(content: &str) -> Result<()> {
         "ssh_write_file content must be at most 262144 bytes"
     );
     Ok(())
+}
+
+fn validate_ssh_run_max_output_bytes(max_output_bytes: usize) -> Result<usize> {
+    ensure!(
+        max_output_bytes > 0,
+        "ssh_run max_output_bytes must be greater than zero"
+    );
+    ensure!(
+        max_output_bytes <= 1024 * 1024,
+        "ssh_run max_output_bytes must be at most 1048576"
+    );
+    Ok(max_output_bytes)
 }
 
 fn parse_file_too_large_marker(stderr: &str) -> Option<usize> {

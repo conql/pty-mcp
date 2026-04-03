@@ -2,6 +2,10 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     process::{Output, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -145,6 +149,7 @@ impl SshRuntime {
             "ssh mount command timed out",
             "ssh mount task failed",
             "failed to execute ssh mount command",
+            None,
         )
         .await?;
 
@@ -206,6 +211,7 @@ impl SshRuntime {
         &self,
         request: SshExecPlanRequest,
         timeout: Option<Duration>,
+        max_output_bytes: Option<usize>,
     ) -> Result<Output> {
         let ssh_bin_path = ensure_ssh_binary(request.ssh_bin_path)?;
         let remote_command = build_remote_exec_command(
@@ -232,6 +238,7 @@ impl SshRuntime {
             "ssh command timed out",
             "ssh command task failed",
             "failed to execute ssh command",
+            max_output_bytes,
         )
         .await
     }
@@ -260,6 +267,7 @@ impl SshRuntime {
                 "ssh unmount command timed out",
                 "ssh unmount task failed",
                 "failed to execute ssh unmount command",
+                None,
             )
             .await?;
 
@@ -316,6 +324,7 @@ impl SshRuntime {
             "diskutil unmount command timed out",
             "diskutil unmount task failed",
             "failed to execute diskutil unmount command",
+            None,
         )
         .await?;
 
@@ -699,6 +708,7 @@ async fn run_verify_command(
         "ssh verification timed out",
         "ssh verification task failed",
         "failed to execute ssh verification command",
+        None,
     )
     .await
 }
@@ -758,6 +768,7 @@ async fn run_command(
     timeout_message: &str,
     join_message: &str,
     execution_message: &str,
+    max_output_bytes: Option<usize>,
 ) -> Result<Output> {
     let mut child = Command::new(&program)
         .args(args)
@@ -774,8 +785,19 @@ async fn run_command(
             }
         })?;
 
-    let stdout_task = spawn_capture_task(child.stdout.take());
-    let stderr_task = spawn_capture_task(child.stderr.take());
+    let captured_bytes = max_output_bytes.map(|_| Arc::new(AtomicUsize::new(0)));
+    let stdout_task = spawn_capture_task(
+        child.stdout.take(),
+        captured_bytes.clone(),
+        max_output_bytes,
+        "stdout",
+    );
+    let stderr_task = spawn_capture_task(
+        child.stderr.take(),
+        captured_bytes,
+        max_output_bytes,
+        "stderr",
+    );
 
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(result) => result.map_err(|source| anyhow!("{execution_message}: {source}"))?,
@@ -805,7 +827,12 @@ fn capability_unavailable(message: impl Into<String>) -> anyhow::Error {
     anyhow!("required ssh capability is unavailable: {}", message.into())
 }
 
-fn spawn_capture_task<R>(reader: Option<R>) -> JoinHandle<Result<Vec<u8>, std::io::Error>>
+fn spawn_capture_task<R>(
+    reader: Option<R>,
+    captured_bytes: Option<Arc<AtomicUsize>>,
+    max_output_bytes: Option<usize>,
+    stream_name: &'static str,
+) -> JoinHandle<Result<Vec<u8>, std::io::Error>>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -815,7 +842,24 @@ where
         };
 
         let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).await?;
+        let mut chunk = [0_u8; 8192];
+        loop {
+            let read = reader.read(&mut chunk).await?;
+            if read == 0 {
+                break;
+            }
+
+            if let (Some(counter), Some(limit)) = (captured_bytes.as_ref(), max_output_bytes) {
+                let total = counter.fetch_add(read, Ordering::Relaxed) + read;
+                if total > limit {
+                    return Err(std::io::Error::other(format!(
+                        "ssh command output exceeded max_output_bytes: stream={stream_name} limit={limit}"
+                    )));
+                }
+            }
+
+            buffer.extend_from_slice(&chunk[..read]);
+        }
         Ok(buffer)
     })
 }
