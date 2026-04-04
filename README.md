@@ -170,9 +170,9 @@ In practice:
 
 Without local FUSE support and `sshfs`, SSH connections and remote command execution can still work, but `ssh_mount` will not.
 
-On macOS, `ssh_mount` also adds `sshfs` mount options that suppress AppleDouble files and Apple extended attributes by default. This prevents `.DS_Store`, `._*`, and related Apple metadata from being written back into the remote tree in the common case.
+On macOS, `ssh_mount` also adds `sshfs` mount options that suppress AppleDouble files (`._*`) and Apple extended attributes by default. This helps avoid writing those forms of Apple metadata back into the remote tree in the common case, but does not prevent Finder from creating `.DS_Store` files.
 
-If Finder or `cp` reports metadata or permission errors while copying into a mounted path, disable that behavior with `PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA=false`.
+If Finder or `cp` reports metadata or permission errors while copying into a mounted path, disable that metadata-blocking mount behavior with `PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA=false`.
 
 Agents can read the built-in mount setup resources and **walk the user through the correct FUSE/`sshfs` installation steps** for the current platform.
 
