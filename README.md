@@ -151,6 +151,7 @@ flowchart LR
 - `ssh_list_dir`: list one remote directory level
 - `ssh_mkdir`: create a remote directory
 - `ssh_mount`: mount a remote path locally through `sshfs`
+  - `remote_path` accepts an absolute path or `~/...`; home-relative inputs are resolved over SSH before mounting, and mount responses/resources store the resolved absolute path
 - `ssh_unmount`: unmount a mounted remote path
 - `ssh_disconnect`: disconnect and optionally clean up related resources
 
