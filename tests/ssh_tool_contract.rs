@@ -422,7 +422,8 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
     let remote_path_description = mount_properties["remote_path"]["description"]
         .as_str()
         .expect("ssh_mount remote_path description");
-    assert!(remote_path_description.contains("absolute path or ~/"));
+    assert!(remote_path_description.contains("absolute path"));
+    assert!(remote_path_description.contains("~, or ~/"));
 
     let read_required = read_file
         .input_schema

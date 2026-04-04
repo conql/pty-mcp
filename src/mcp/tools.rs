@@ -446,7 +446,7 @@ pub struct SshRunResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshMountRequest {
     pub connection_id: SshConnectionId,
-    #[schemars(description = "Remote path to mount. Must be an absolute path or ~/...")]
+    #[schemars(description = "Remote path to mount. Must be an absolute path, ~, or ~/...")]
     pub remote_path: String,
     #[schemars(
         description = "Local mount target path. Must be inside the configured managed or allowed mount roots."
