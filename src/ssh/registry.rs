@@ -441,19 +441,16 @@ impl SshRegistry {
         remote_path: impl Into<String>,
         local_path: impl Into<String>,
     ) -> Result<SshMountSummary> {
-        if self.get_connection(connection_id).is_none() {
-            return Err(ssh_connection_not_found(connection_id));
-        }
+        let connection = self
+            .get_connection(connection_id)
+            .ok_or_else(|| ssh_connection_not_found(connection_id))?;
 
         let summary = SshMountSummary {
             mount_id: SshMountId::new(),
             title: None,
             description: None,
             connection_id: connection_id.clone(),
-            target_summary: self
-                .get_connection(connection_id)
-                .map(|connection| connection.target_summary)
-                .ok_or_else(|| ssh_connection_not_found(connection_id))?,
+            target_summary: connection.target_summary,
             status: SshMountStatus::Mounting,
             backend: SshMountBackend::Sshfs,
             local_path: local_path.into(),
