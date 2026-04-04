@@ -100,6 +100,7 @@ fn ssh_mount_summary_serializes_backend_as_enum() {
         title: Some("project mount".to_string()),
         description: Some("repo checkout".to_string()),
         connection_id: SshConnectionId::new(),
+        target_summary: "alice@devbox:22".to_string(),
         status: SshMountStatus::Mounted,
         backend: SshMountBackend::Sshfs,
         local_path: "/tmp/mnt/project".to_string(),
@@ -112,6 +113,7 @@ fn ssh_mount_summary_serializes_backend_as_enum() {
     let value = serde_json::to_value(summary).expect("serialize mount summary");
     assert_eq!(value["status"], "mounted");
     assert_eq!(value["backend"], "sshfs");
+    assert_eq!(value["target_summary"], "alice@devbox:22");
     assert_eq!(value["local_path"], "/tmp/mnt/project");
     assert_eq!(value["remote_path"], "/srv/project");
 }

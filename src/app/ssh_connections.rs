@@ -698,6 +698,7 @@ mod tests {
             title: None,
             description: None,
             connection_id: connection.connection_id.clone(),
+            target_summary: connection.target_summary.clone(),
             status: crate::ssh::SshMountStatus::Mounted,
             backend: crate::ssh::SshMountBackend::Sshfs,
             local_path: "/tmp/demo".into(),

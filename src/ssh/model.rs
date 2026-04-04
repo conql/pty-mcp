@@ -243,6 +243,7 @@ pub struct SshMountSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub connection_id: SshConnectionId,
+    pub target_summary: String,
     pub status: SshMountStatus,
     pub backend: SshMountBackend,
     pub local_path: String,

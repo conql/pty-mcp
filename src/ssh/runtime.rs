@@ -957,6 +957,7 @@ mod tests {
                 title: None,
                 description: None,
                 connection_id: SshConnectionId::new(),
+                target_summary: target.summary(),
                 status: SshMountStatus::Mounting,
                 backend: SshMountBackend::Sshfs,
                 local_path: "/tmp/mount".to_string(),
