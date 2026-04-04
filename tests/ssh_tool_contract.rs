@@ -416,6 +416,16 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
         .and_then(Value::as_array)
         .expect("ssh_mount should expose required fields");
     assert!(mount_required.contains(&serde_json::json!("target_path")));
+    let mount_properties = mount
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("ssh_mount properties");
+    let remote_path_description = mount_properties["remote_path"]["description"]
+        .as_str()
+        .expect("ssh_mount remote_path description");
+    assert!(remote_path_description.contains("absolute path"));
+    assert!(remote_path_description.contains("~, or ~/"));
 
     let read_required = read_file
         .input_schema

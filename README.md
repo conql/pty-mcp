@@ -183,6 +183,7 @@ Constraint:
 - `ssh_mount`: mount a remote path locally through `sshfs`
 - `ssh_mount.target_path`: local mount target path
 - `ssh_mount.create_target`: create the local mount target directory when needed
+- `ssh_mount.remote_path`: accepts an absolute path, `~`, or `~/...`; home-relative inputs are resolved over SSH before mounting, and mount responses/resources store the resolved absolute path
 - `ssh_unmount`: unmount a mounted remote path
 - `ssh_unmount.cleanup_target`: remove the target path only when cleanup is allowed
 - `ssh_disconnect`: disconnect and optionally clean up related resources

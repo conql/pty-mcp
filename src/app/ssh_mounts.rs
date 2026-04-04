@@ -1,9 +1,10 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail, ensure};
 use chrono::Utc;
 
 use super::{
     SshService,
     context::SshMountRuntimeContext,
+    support::{remote_command_failed, validate_remote_path},
     types::{SshMountRequest, SshUnmountRequest, SshUnmountResult},
 };
 
@@ -12,6 +13,45 @@ fn mount_description(description: Option<String>, remote_path: &str, target_path
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| format!("SSH mount: {remote_path} -> {target_path}"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParsedRemoteMountPath<'a> {
+    Absolute(&'a str),
+    Home,
+    HomeRelative(&'a str),
+}
+
+fn parse_mount_remote_path(remote_path: &str) -> Result<ParsedRemoteMountPath<'_>> {
+    let remote_path = validate_remote_path(remote_path, "ssh_mount remote_path")?;
+    if remote_path.starts_with('/') {
+        return Ok(ParsedRemoteMountPath::Absolute(remote_path));
+    }
+    if remote_path == "~" {
+        return Ok(ParsedRemoteMountPath::Home);
+    }
+    if let Some(rest) = remote_path.strip_prefix("~/") {
+        return Ok(ParsedRemoteMountPath::HomeRelative(rest));
+    }
+    if remote_path.starts_with('~') {
+        bail!(
+            "ssh_mount remote_path only supports ~ or ~/..., not user-relative paths: remote_path={remote_path}"
+        );
+    }
+
+    bail!(
+        "ssh_mount remote_path must be an absolute path or home-relative path: remote_path={remote_path}"
+    );
+}
+
+fn join_home_relative_remote_path(home: &str, rest: &str) -> String {
+    if rest.is_empty() {
+        return home.to_string();
+    }
+    if home == "/" {
+        return format!("/{rest}");
+    }
+    format!("{home}/{rest}")
 }
 
 impl SshService {
@@ -31,11 +71,14 @@ impl SshService {
         let target_path = self
             .context
             .resolve_mount_local_path(&request.target_path)?;
+        let remote_path = self
+            .resolve_mount_remote_path(&request.connection_id, &request.remote_path)
+            .await?;
         let validated = self.context.ssh_guard.validate_mount_request(
             &self.context.ssh_config,
             crate::ssh::guard::SshMountValidationInput {
                 local_path: &target_path,
-                remote_path: &request.remote_path,
+                remote_path: &remote_path,
             },
         )?;
 
@@ -174,6 +217,59 @@ impl SshService {
             }
         }
     }
+
+    async fn resolve_mount_remote_path(
+        &self,
+        connection_id: &crate::ssh::SshConnectionId,
+        remote_path: &str,
+    ) -> Result<String> {
+        match parse_mount_remote_path(remote_path)? {
+            ParsedRemoteMountPath::Absolute(path) => Ok(path.to_string()),
+            ParsedRemoteMountPath::Home => self.resolve_remote_home_for_mount(connection_id).await,
+            ParsedRemoteMountPath::HomeRelative(rest) => {
+                let home = self.resolve_remote_home_for_mount(connection_id).await?;
+                Ok(join_home_relative_remote_path(&home, rest))
+            }
+        }
+    }
+
+    async fn resolve_remote_home_for_mount(
+        &self,
+        connection_id: &crate::ssh::SshConnectionId,
+    ) -> Result<String> {
+        let output = self
+            .run_ssh_capture(
+                connection_id,
+                "set -eu\nprintf '%s' \"${HOME:?}\"",
+                Some("failed to resolve remote home for ssh_mount"),
+                None,
+            )
+            .await?;
+
+        if !output.status.success() {
+            return Err(remote_command_failed(
+                "failed to resolve remote home for ssh_mount",
+                connection_id,
+                None,
+                output,
+            ));
+        }
+
+        let home = String::from_utf8(output.stdout).map_err(|_| {
+            anyhow!(
+                "failed to resolve remote home for ssh_mount: connection_id={} remote HOME is not valid UTF-8",
+                connection_id.as_str()
+            )
+        })?;
+        let home = home.trim();
+        ensure!(
+            !home.is_empty() && home.starts_with('/'),
+            "failed to resolve remote home for ssh_mount: connection_id={} remote_home={home:?}",
+            connection_id.as_str()
+        );
+
+        Ok(home.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -181,6 +277,54 @@ mod tests {
     use crate::Config;
 
     use super::*;
+
+    #[test]
+    fn parse_mount_remote_path_accepts_absolute_and_home_relative_forms() {
+        assert_eq!(
+            parse_mount_remote_path("/srv/project").unwrap(),
+            ParsedRemoteMountPath::Absolute("/srv/project")
+        );
+        assert_eq!(
+            parse_mount_remote_path("~").unwrap(),
+            ParsedRemoteMountPath::Home
+        );
+        assert_eq!(
+            parse_mount_remote_path("~/workspace/sdc-skill").unwrap(),
+            ParsedRemoteMountPath::HomeRelative("workspace/sdc-skill")
+        );
+        assert_eq!(
+            parse_mount_remote_path("~/").unwrap(),
+            ParsedRemoteMountPath::HomeRelative("")
+        );
+    }
+
+    #[test]
+    fn parse_mount_remote_path_rejects_invalid_forms() {
+        let relative = parse_mount_remote_path("relative/path").expect_err("relative path");
+        assert!(format!("{relative:#}").contains("absolute path or home-relative path"));
+
+        let user_relative = parse_mount_remote_path("~alice/project").expect_err("user-relative");
+        assert!(format!("{user_relative:#}").contains("only supports ~ or ~/..."));
+
+        let empty = parse_mount_remote_path(" ").expect_err("empty path");
+        assert!(format!("{empty:#}").contains("cannot be empty"));
+    }
+
+    #[test]
+    fn join_home_relative_remote_path_preserves_literal_suffix() {
+        assert_eq!(
+            join_home_relative_remote_path("/home/alice", ""),
+            "/home/alice"
+        );
+        assert_eq!(
+            join_home_relative_remote_path("/home/alice", "../project"),
+            "/home/alice/../project"
+        );
+        assert_eq!(
+            join_home_relative_remote_path("/", "workspace"),
+            "/workspace"
+        );
+    }
 
     #[test]
     fn ensure_mount_local_path_handles_creation_rules() {

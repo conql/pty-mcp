@@ -114,6 +114,67 @@ async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()>
 }
 
 #[tokio::test]
+async fn ssh_mount_accepts_home_relative_remote_paths_and_returns_resolved_path() -> Result<()> {
+    let harness = E2eHarness::builder("e2e_ssh_mount_home_relative")
+        .env("HOME", "/home/alice")
+        .start()
+        .await?;
+    let local_path = harness.managed_mount_root().join("home-relative");
+
+    let connected = harness
+        .call_tool_typed::<SshConnectResponse>(
+            "ssh_connect",
+            json!({
+                "host_alias": "devbox",
+                "auth_kind": "config_alias",
+                "user": "alice",
+                "description": "ssh mount home-relative e2e"
+            }),
+        )
+        .await?;
+
+    let mounted = harness
+        .call_tool_typed::<SshMountResponse>(
+            "ssh_mount",
+            json!({
+                "connection_id": connected.connection_id,
+                "remote_path": "~/workspace/sdc-skill",
+                "target_path": local_path,
+                "description": "ssh mount home-relative e2e"
+            }),
+        )
+        .await?;
+    ensure!(mounted.remote_path == "/home/alice/workspace/sdc-skill");
+
+    let listed = harness
+        .call_tool_typed::<SshListResponse>("ssh_list", json!({}))
+        .await?;
+    ensure!(listed.mounts.iter().any(|mount| {
+        mount.mount_id == mounted.mount_id && mount.remote_path == "/home/alice/workspace/sdc-skill"
+    }));
+
+    let mount_resource = harness
+        .read_resource_json(&format!("ssh://mounts/{}", mounted.mount_id))
+        .await?;
+    ensure!(mount_resource["remote_path"] == json!("/home/alice/workspace/sdc-skill"));
+
+    ensure!(!harness.fake_bins().read_ssh_log().trim().is_empty());
+    assert_text_contains(
+        &harness.fake_bins().read_sshfs_log(),
+        "/home/alice/workspace/sdc-skill",
+        "sshfs log",
+    )?;
+    ensure!(
+        !harness
+            .fake_bins()
+            .read_sshfs_log()
+            .contains(":~/workspace/sdc-skill")
+    );
+
+    harness.shutdown().await
+}
+
+#[tokio::test]
 async fn ssh_unmount_cleans_managed_mounts_but_keeps_explicit_paths() -> Result<()> {
     let harness = E2eHarness::builder("e2e_ssh_mount_unmount_cleanup")
         .start()
