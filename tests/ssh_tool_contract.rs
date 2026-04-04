@@ -258,7 +258,12 @@ fn mount_feature_available_config(sandbox: &TempDirGuard) -> anyhow::Result<Conf
     let umount_path = sandbox.path.join("umount");
 
     write_fake_executable(&ssh_path, "#!/bin/sh\necho 'OpenSSH_9.9p1' >&2\n")?;
-    write_fake_executable(&sshfs_path, "#!/bin/sh\necho 'SSHFS 3.7.3'\n")?;
+    let sshfs_version = if cfg!(target_os = "macos") {
+        "SSHFS 3.7.3 (macFUSE 4.6.0)"
+    } else {
+        "SSHFS 3.7.3"
+    };
+    write_fake_executable(&sshfs_path, &format!("#!/bin/sh\necho '{sshfs_version}'\n"))?;
     write_fake_executable(&umount_path, "#!/bin/sh\necho 'umount util-linux 2.39'\n")?;
 
     let mut config = Config::default();
@@ -1198,7 +1203,7 @@ async fn ssh_disconnect_force_cleans_up_session_and_mounts() -> anyhow::Result<(
     )?;
     write_fake_executable(
         &sshfs_path,
-        "#!/bin/sh\nset -eu\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"--version\" ] || [ \"${1:-}\" = \"-V\" ]; then echo 'SSHFS 3.7.3 (macFUSE 4.6.0)'; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
     )?;
     write_fake_executable(
         &umount_path,

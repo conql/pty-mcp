@@ -4,8 +4,9 @@ use chrono::Utc;
 use crate::{
     session::{SessionId, SessionStatus},
     ssh::{
-        SshAuthKind, SshConnectionId, SshConnectionRelations, SshConnectionResourceCounts,
-        SshConnectionStatus, SshConnectionSummary, SshMountId, SshMountSummary, SshTarget,
+        SshAuthKind, SshCapabilityView, SshConnectionId, SshConnectionRelations,
+        SshConnectionResourceCounts, SshConnectionStatus, SshConnectionSummary, SshMountId,
+        SshMountSummary, SshTarget,
     },
 };
 
@@ -27,8 +28,7 @@ fn connection_description(description: Option<String>, target: &SshTarget) -> Op
 
 impl SshService {
     pub fn mount_feature_available(&self) -> bool {
-        self.context.ssh_capabilities.sshfs.available
-            && self.context.ssh_capabilities.unmount.available
+        mount_feature_available_for(&self.context.ssh_capabilities)
     }
 
     pub fn create_placeholder_connection(&self, target: SshTarget) -> SshConnectionSummary {
@@ -479,6 +479,16 @@ impl SshService {
     }
 }
 
+fn mount_feature_available_for(capabilities: &SshCapabilityView) -> bool {
+    capabilities.sshfs.available
+        && capabilities.unmount.available
+        && (!cfg!(target_os = "macos")
+            || capabilities
+                .macfuse
+                .as_ref()
+                .is_some_and(|capability| capability.available))
+}
+
 fn is_active_mount_status(status: &crate::ssh::SshMountStatus) -> bool {
     matches!(
         status,
@@ -492,6 +502,8 @@ fn is_active_mount_status(status: &crate::ssh::SshMountStatus) -> bool {
 mod tests {
     use std::path::PathBuf;
 
+    #[cfg(target_os = "macos")]
+    use crate::ssh::{MacFuseCapability, SshBinaryCapability, SshCapabilityView};
     use crate::{Config, session::SessionSummary, ssh::SshTarget};
 
     use super::*;
@@ -500,6 +512,37 @@ mod tests {
         let mut config = Config::default();
         config.ssh.ssh_bin_path = Some(PathBuf::from("/usr/bin/true"));
         super::super::AppState::new(config)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mount_feature_requires_macfuse_on_macos() {
+        let without_macfuse = SshCapabilityView {
+            sshfs: SshBinaryCapability {
+                available: true,
+                ..Default::default()
+            },
+            unmount: SshBinaryCapability {
+                available: true,
+                ..Default::default()
+            },
+            macfuse: Some(MacFuseCapability {
+                available: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!mount_feature_available_for(&without_macfuse));
+
+        let with_macfuse = SshCapabilityView {
+            macfuse: Some(MacFuseCapability {
+                available: true,
+                provider: Some("macFUSE".to_string()),
+                version: Some("4.6.0".to_string()),
+            }),
+            ..without_macfuse
+        };
+        assert!(mount_feature_available_for(&with_macfuse));
     }
 
     #[tokio::test]
