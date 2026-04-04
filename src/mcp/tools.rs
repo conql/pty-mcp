@@ -294,7 +294,26 @@ pub struct SshConnectResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshListResponse {
     pub connections: Vec<SshConnectionSummary>,
-    pub mounts: Vec<SshMountSummary>,
+    pub mounts: Vec<SshMountSummaryView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshMountSummaryView {
+    pub mount_id: SshMountId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub connection_id: SshConnectionId,
+    pub target_summary: String,
+    pub status: SshMountStatus,
+    pub backend: SshMountBackend,
+    pub target_path: String,
+    pub remote_path: String,
+    pub read_only: bool,
+    pub mounted_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -953,7 +972,7 @@ impl PtyMcpServer {
         let result = self.app().ssh().list();
         Json(SshListResponse {
             connections: result.connections,
-            mounts: result.mounts,
+            mounts: result.mounts.into_iter().map(Into::into).collect(),
         })
     }
 
@@ -1604,4 +1623,23 @@ fn enrich_sessions_with_ssh_context(app: &AppState) -> Vec<SessionSummary> {
     }
 
     sessions
+}
+
+impl From<SshMountSummary> for SshMountSummaryView {
+    fn from(value: SshMountSummary) -> Self {
+        Self {
+            mount_id: value.mount_id,
+            title: value.title,
+            description: value.description,
+            connection_id: value.connection_id,
+            target_summary: value.target_summary,
+            status: value.status,
+            backend: value.backend,
+            target_path: value.local_path,
+            remote_path: value.remote_path,
+            read_only: value.read_only,
+            mounted_at: value.mounted_at,
+            last_error: value.last_error,
+        }
+    }
 }

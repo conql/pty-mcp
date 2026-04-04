@@ -590,7 +590,7 @@ async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result
         connection.connection_id.as_str()
     );
     assert_eq!(mount_resource["target_summary"], connection.target_summary);
-    assert_eq!(mount_resource["local_path"], mount.local_path);
+    assert_eq!(mount_resource["target_path"], mount.local_path);
     assert_eq!(mount_resource["remote_path"], mount.remote_path);
 
     client.cancel().await?;
