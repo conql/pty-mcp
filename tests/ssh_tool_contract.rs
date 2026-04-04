@@ -51,6 +51,7 @@ fn mounted_summary(connection_id: pty_mcp::ssh::SshConnectionId, suffix: &str) -
         title: Some(format!("mount-{suffix}")),
         description: None,
         connection_id,
+        target_summary: "alice@devbox:22".to_string(),
         status: SshMountStatus::Mounted,
         backend: SshMountBackend::Sshfs,
         local_path: format!("/tmp/ssh-mount-{suffix}"),
@@ -563,6 +564,7 @@ async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result
         mounts_resource["mounts"],
         serde_json::to_value(&listed.mounts)?
     );
+    assert_eq!(listed.mounts[0].target_summary, connection.target_summary);
 
     let mount_resource = read_json_resource(
         &client,
@@ -574,6 +576,7 @@ async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result
         mount_resource["connection_id"],
         connection.connection_id.as_str()
     );
+    assert_eq!(mount_resource["target_summary"], connection.target_summary);
     assert_eq!(mount_resource["local_path"], mount.local_path);
     assert_eq!(mount_resource["remote_path"], mount.remote_path);
 

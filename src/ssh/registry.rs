@@ -450,6 +450,10 @@ impl SshRegistry {
             title: None,
             description: None,
             connection_id: connection_id.clone(),
+            target_summary: self
+                .get_connection(connection_id)
+                .map(|connection| connection.target_summary)
+                .ok_or_else(|| ssh_connection_not_found(connection_id))?,
             status: SshMountStatus::Mounting,
             backend: SshMountBackend::Sshfs,
             local_path: local_path.into(),
