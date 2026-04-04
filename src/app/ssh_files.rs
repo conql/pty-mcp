@@ -82,13 +82,13 @@ impl SshService {
         path: &str,
         content: &str,
         append: bool,
-        create_parent: bool,
+        create_parents: bool,
     ) -> Result<SshWriteFileResult> {
         let path = validate_remote_path(path, "ssh_write_file path")?;
         validate_remote_write_size(content)?;
         let redirect = if append { ">>" } else { ">" };
         let mut script = String::from("set -eu\n");
-        if create_parent {
+        if create_parents {
             script.push_str(&format!(
                 "mkdir -p -- \"$(dirname -- {})\"\n",
                 shell_escape(path)
@@ -171,10 +171,10 @@ impl SshService {
         &self,
         connection_id: &crate::ssh::SshConnectionId,
         path: &str,
-        parents: bool,
+        create_parents: bool,
     ) -> Result<SshMkdirResult> {
         let path = validate_remote_path(path, "ssh_mkdir path")?;
-        let flag = if parents { "-p " } else { "" };
+        let flag = if create_parents { "-p " } else { "" };
         let script = format!(
             "set -eu\nmkdir {flag}-- {path}",
             flag = flag,
@@ -200,7 +200,7 @@ impl SshService {
         Ok(SshMkdirResult {
             connection_id: connection_id.clone(),
             path: path.to_string(),
-            parents,
+            create_parents,
         })
     }
 

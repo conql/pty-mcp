@@ -11,6 +11,7 @@ use std::str::FromStr;
 use crate::{
     AppState,
     buffer::{BufferReadRequest, BufferView},
+    mcp::tools::SshMountSummaryView,
 };
 
 const SESSIONS_URI: &str = "pty://sessions";
@@ -188,9 +189,17 @@ pub fn read_resource(app: &AppState, uri: &str) -> Result<ReadResourceResult, Er
         SSH_CONNECTIONS_URI => {
             json_contents(uri, json!({ "connections": app.ssh().list_connections() }))
         }
-        SSH_MOUNTS_URI if app.ssh_mount_feature_available() => {
-            json_contents(uri, json!({ "mounts": app.ssh().list_mounts() }))
-        }
+        SSH_MOUNTS_URI if app.ssh_mount_feature_available() => json_contents(
+            uri,
+            json!({
+                "mounts": app
+                    .ssh()
+                    .list_mounts()
+                    .into_iter()
+                    .map(SshMountSummaryView::from)
+                    .collect::<Vec<_>>()
+            }),
+        ),
         SSH_MOUNT_SETUP_URI => markdown_contents(uri, SSH_MOUNT_SETUP_GUIDE),
         _ if uri.starts_with("pty://sessions/") => read_session_resource(app, uri)?,
         _ if uri.starts_with("ssh://connections/") => read_ssh_connection_resource(app, uri)?,
@@ -323,7 +332,7 @@ fn read_ssh_mount_resource(app: &AppState, uri: &str) -> Result<ResourceContents
 
     Ok(json_contents(
         uri,
-        serde_json::to_value(mount).unwrap_or_default(),
+        serde_json::to_value(SshMountSummaryView::from(mount)).unwrap_or_default(),
     ))
 }
 

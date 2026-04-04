@@ -72,13 +72,17 @@ impl ServerHandler for PtyMcpServer {
         ServerInfo::new(capabilities).with_instructions(
             format!(
                 "Manage PTY sessions through tools. Use pty_spawn, pty_write, pty_read, \
-                 pty_list, pty_kill, and pty_wait for the main PTY workflow. Use ssh_connect, \
-                 ssh_session_spawn, ssh_exec, ssh_run, ssh_read_file, ssh_write_file, ssh_list_dir, \
-                 ssh_mkdir{ssh_mount_tools} ssh_list, and ssh_disconnect to manage SSH \
-                 connections, remote sessions, remote files, and mount summaries. Resources \
+                 pty_list, pty_kill, and pty_wait for the main PTY workflow. PTY reads are \
+                 agent-first: default to compact page.text, request line_number_mode=embedded \
+                 only when precise line references matter, and set capture_limit only when you \
+                 need initial_output. output_view=raw cannot be combined with \
+                 line_number_mode=embedded. Use ssh_connect, ssh_session_spawn, ssh_exec, \
+                 ssh_run, ssh_read_file, ssh_write_file, ssh_list_dir, ssh_mkdir{ssh_mount_tools} \
+                 ssh_list, and ssh_disconnect to manage SSH connections, remote sessions, remote \
+                 files, and mount summaries. ssh_connect requires explicit auth_kind. Resources \
                  expose read-only snapshots, including pty://sessions plus ssh://connections{ssh_mount_resources}. \
-                 When SSH mount support is unavailable or a mount fails because \
-                 local prerequisites are missing, read ssh://docs/mount-setup and the matching \
+                 When SSH mount support is unavailable or a mount fails because local prerequisites \
+                 are missing, read ssh://docs/mount-setup and the matching \
                  ssh://docs/mount-setup/{{platform}} guide before suggesting installation steps. \
                  Tasks are available as an optional enhancement."
             ),

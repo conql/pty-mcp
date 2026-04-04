@@ -31,8 +31,8 @@ async fn resources_track_live_state_and_retained_buffers() -> Result<()> {
                 "args": ["-lc", "printf 'alpha\\nbeta\\n'"],
                 "cwd": harness.workspace_root(),
                 "description": "resource sync session",
-                "wait_for_output_ms": 300,
-                "output_limit": 20
+                "capture_wait_ms": 300,
+                "capture_limit": 20
             }),
         )
         .await?;
@@ -85,8 +85,8 @@ async fn resources_and_pty_list_stay_consistent_across_exit_and_retained_states(
                 "args": ["-lc", "printf 'resource-local-exit\\n'"],
                 "cwd": harness.workspace_root(),
                 "description": "resource local exited",
-                "wait_for_output_ms": 300,
-                "output_limit": 20
+                "capture_wait_ms": 300,
+                "capture_limit": 20
             }),
         )
         .await?;
@@ -114,8 +114,8 @@ async fn resources_and_pty_list_stay_consistent_across_exit_and_retained_states(
                 "args": ["-lc", "printf 'resource-retained-live\\n'; trap 'printf resource-retained-exit\\n; exit 0' TERM INT; while :; do sleep 1; done"],
                 "cwd": harness.workspace_root(),
                 "description": "resource retained without cleanup",
-                "wait_for_output_ms": 300,
-                "output_limit": 20
+                "capture_wait_ms": 300,
+                "capture_limit": 20
             }),
         )
         .await?;
@@ -131,7 +131,7 @@ async fn resources_and_pty_list_stay_consistent_across_exit_and_retained_states(
                     }),
                 )
                 .await?;
-            Ok(read.lines.contains("resource-retained-live"))
+            Ok(read.page.text.contains("resource-retained-live"))
         })
         .await?;
 
@@ -141,17 +141,18 @@ async fn resources_and_pty_list_stay_consistent_across_exit_and_retained_states(
             json!({
                 "session_id": local_retained.session_id,
                 "signal": "sigterm",
-                "cleanup": false
+                "cleanup_session": false
             }),
         )
         .await?;
-    ensure!(!killed.cleanup);
+    ensure!(!killed.cleanup_session);
 
     let connected = harness
         .call_tool_typed::<SshConnectResponse>(
             "ssh_connect",
             json!({
                 "host_alias": "devbox",
+                "auth_kind": "config_alias",
                 "user": "alice",
                 "description": "resource ssh state coverage"
             }),

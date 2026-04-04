@@ -120,10 +120,10 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
         .mount(SshMountRequest {
             connection_id: connection.connection_id.clone(),
             remote_path: "/srv/project".to_string(),
-            local_path: managed_path.display().to_string(),
+            target_path: managed_path.display().to_string(),
             read_only: false,
             backend: None,
-            create_local_path: true,
+            create_target: true,
             title: Some("Managed".to_string()),
             description: Some("managed mount".to_string()),
         })
@@ -145,12 +145,12 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
         .unmount(SshUnmountRequest {
             mount_id: managed_mount.mount_id.clone(),
             force: false,
-            cleanup_local_path: true,
+            cleanup_target: true,
         })
         .await?;
     assert_eq!(managed_unmount.previous_status, SshMountStatus::Mounted);
     assert_eq!(managed_unmount.mount.status, SshMountStatus::Unmounted);
-    assert!(managed_unmount.cleanup_local_path);
+    assert!(managed_unmount.cleanup_target);
     assert!(!managed_path.exists());
 
     let explicit_path = explicit_root.join("explicit-mount");
@@ -160,10 +160,10 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
         .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "/srv/project-explicit".to_string(),
-            local_path: explicit_path.display().to_string(),
+            target_path: explicit_path.display().to_string(),
             read_only: false,
             backend: None,
-            create_local_path: false,
+            create_target: false,
             title: Some("Explicit".to_string()),
             description: Some("explicit mount".to_string()),
         })
@@ -174,10 +174,10 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
         .unmount(SshUnmountRequest {
             mount_id: explicit_mount.mount_id,
             force: false,
-            cleanup_local_path: true,
+            cleanup_target: true,
         })
         .await?;
-    assert!(!explicit_unmount.cleanup_local_path);
+    assert!(!explicit_unmount.cleanup_target);
     assert!(explicit_path.exists());
 
     let log = fs::read_to_string(log_path)?;
@@ -220,10 +220,10 @@ async fn ssh_mount_resolves_home_relative_remote_paths_before_mounting() -> anyh
         .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "~/workspace/sdc-skill".to_string(),
-            local_path: local_path.display().to_string(),
+            target_path: local_path.display().to_string(),
             read_only: false,
             backend: None,
-            create_local_path: true,
+            create_target: true,
             title: Some("HomeRelative".to_string()),
             description: Some("home-relative mount".to_string()),
         })
@@ -269,13 +269,13 @@ async fn ssh_mount_rejects_relative_remote_paths_before_invoking_sshfs() -> anyh
         .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "relative/path".to_string(),
-            local_path: managed_root
+            target_path: managed_root
                 .join("invalid-remote-path")
                 .display()
                 .to_string(),
             read_only: false,
             backend: None,
-            create_local_path: true,
+            create_target: true,
             title: None,
             description: Some("relative remote path".to_string()),
         })
@@ -305,14 +305,14 @@ async fn ssh_mount_reports_capability_unavailable_when_sshfs_missing() -> anyhow
         .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "/srv/project".to_string(),
-            local_path: sandbox
+            target_path: sandbox
                 .path
                 .join("missing-sshfs-mount")
                 .display()
                 .to_string(),
             read_only: false,
             backend: None,
-            create_local_path: true,
+            create_target: true,
             title: None,
             description: Some("missing sshfs".to_string()),
         })
@@ -332,7 +332,7 @@ async fn ssh_unmount_reports_missing_mount() -> anyhow::Result<()> {
         .unmount(SshUnmountRequest {
             mount_id: SshMountId::new(),
             force: false,
-            cleanup_local_path: false,
+            cleanup_target: false,
         })
         .await
         .expect_err("missing mount should fail");
@@ -365,10 +365,10 @@ async fn ssh_mount_failures_are_recorded_on_mount_summary() -> anyhow::Result<()
         .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "/srv/project".to_string(),
-            local_path: local_path.display().to_string(),
+            target_path: local_path.display().to_string(),
             read_only: false,
             backend: None,
-            create_local_path: true,
+            create_target: true,
             title: None,
             description: Some("failing mount".to_string()),
         })
@@ -418,10 +418,10 @@ async fn shutdown_unmounts_managed_mounts() -> anyhow::Result<()> {
         .mount(SshMountRequest {
             connection_id: connection.connection_id,
             remote_path: "/srv/project".to_string(),
-            local_path: local_path.display().to_string(),
+            target_path: local_path.display().to_string(),
             read_only: false,
             backend: None,
-            create_local_path: true,
+            create_target: true,
             title: None,
             description: Some("shutdown cleanup mount".to_string()),
         })

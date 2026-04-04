@@ -247,7 +247,7 @@ impl SshService {
                     self.unmount(SshUnmountRequest {
                         mount_id,
                         force: request.force,
-                        cleanup_local_path: true,
+                        cleanup_target: true,
                     })
                     .await?;
                     closed_mounts += 1;
@@ -556,7 +556,7 @@ mod tests {
                 host: Some("example.com".into()),
                 user: Some("alice".into()),
                 port: Some(22),
-                auth_kind: Some(SshAuthKind::SshAgent),
+                auth_kind: SshAuthKind::SshAgent,
                 identity_path: None,
                 title: Some("test".into()),
                 description: Some("first".into()),
@@ -571,7 +571,7 @@ mod tests {
                 host: Some("example.com".into()),
                 user: Some("alice".into()),
                 port: Some(22),
-                auth_kind: Some(SshAuthKind::SshAgent),
+                auth_kind: SshAuthKind::SshAgent,
                 identity_path: None,
                 title: Some("test".into()),
                 description: Some("second".into()),
@@ -599,7 +599,7 @@ mod tests {
                 host: None,
                 user: Some("alice".into()),
                 port: Some(22),
-                auth_kind: Some(SshAuthKind::SshAgent),
+                auth_kind: SshAuthKind::SshAgent,
                 identity_path: None,
                 title: None,
                 description: Some("first".into()),
@@ -614,7 +614,7 @@ mod tests {
                 host: None,
                 user: Some("alice".into()),
                 port: Some(22),
-                auth_kind: Some(SshAuthKind::SshAgent),
+                auth_kind: SshAuthKind::SshAgent,
                 identity_path: None,
                 title: None,
                 description: Some("second".into()),

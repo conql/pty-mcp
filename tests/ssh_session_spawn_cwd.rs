@@ -97,6 +97,7 @@ async fn ssh_session_spawn_accepts_home_relative_cwd() -> anyhow::Result<()> {
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "ssh session spawn home cwd"
                 })
