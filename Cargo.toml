@@ -8,13 +8,17 @@ readme = "README.md"
 repository = "https://github.com/observerw/pty-mcp"
 homepage = "https://github.com/observerw/pty-mcp"
 keywords = ["mcp", "pty", "ssh", "terminal", "remote"]
-categories = ["command-line-utilities", "network-programming", "development-tools"]
+categories = [
+    "command-line-utilities",
+    "network-programming",
+    "development-tools",
+]
 
 [dependencies]
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 clap = { version = "4.5.39", features = ["derive"] }
-nix = { version = "0.29.0", features = ["process", "signal"] }
+nix = { version = "0.31.2", features = ["process", "signal"] }
 portable-pty = "0.9.0"
 regex = "1.12.3"
 rmcp = { version = "1.2.0", features = [
