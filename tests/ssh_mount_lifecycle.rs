@@ -57,6 +57,13 @@ fn ready_connection(app: &AppState) -> pty_mcp::ssh::SshConnectionSummary {
 }
 
 #[cfg(unix)]
+fn fake_sshfs_script(body: &str) -> String {
+    format!(
+        "#!/bin/sh\nset -eu\nif [ \"${{1:-}}\" = \"--version\" ] || [ \"${{1:-}}\" = \"-V\" ]; then echo 'SSHFS 3.7.3 (macFUSE 4.6.0)'; exit 0; fi\n{body}\n"
+    )
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dirs()
 -> anyhow::Result<()> {
@@ -71,10 +78,10 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
     let log_path = sandbox.path.join("mount.log");
     write_fake_executable(
         &sshfs_path,
-        &format!(
-            "#!/bin/sh\nset -eu\nprintf 'sshfs %s\\n' \"$*\" >> {log}\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
+        &fake_sshfs_script(&format!(
+            "printf 'sshfs %s\\n' \"$*\" >> {log}\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"",
             log = shell_quote(log_path.as_path()),
-        ),
+        )),
     )?;
     write_fake_executable(
         &umount_path,
@@ -228,7 +235,7 @@ async fn ssh_mount_failures_are_recorded_on_mount_summary() -> anyhow::Result<()
     let sshfs_path = sandbox.path.join("sshfs");
     write_fake_executable(
         &sshfs_path,
-        "#!/bin/sh\necho 'fuse: mount failed' 1>&2\nexit 1\n",
+        &fake_sshfs_script("echo 'fuse: mount failed' 1>&2\nexit 1"),
     )?;
 
     let mut config = Config::default();
@@ -274,7 +281,9 @@ async fn shutdown_unmounts_managed_mounts() -> anyhow::Result<()> {
     let umount_path = sandbox.path.join("umount");
     write_fake_executable(
         &sshfs_path,
-        "#!/bin/sh\nset -eu\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
+        &fake_sshfs_script(
+            "last=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"",
+        ),
     )?;
     write_fake_executable(
         &umount_path,

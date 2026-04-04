@@ -532,6 +532,24 @@ mod tests {
             ..Default::default()
         };
 
+        let missing_sshfs = SshCapabilityView {
+            sshfs: SshBinaryCapability {
+                available: false,
+                ..Default::default()
+            },
+            ..capabilities.clone()
+        };
+        assert!(!mount_feature_available_for(&missing_sshfs));
+
+        let missing_unmount = SshCapabilityView {
+            unmount: SshBinaryCapability {
+                available: false,
+                ..Default::default()
+            },
+            ..capabilities.clone()
+        };
+        assert!(!mount_feature_available_for(&missing_unmount));
+
         if cfg!(target_os = "macos") {
             assert!(!mount_feature_available_for(&capabilities));
         } else {
