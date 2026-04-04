@@ -22,6 +22,7 @@ async fn ssh_file_tools_operate_against_fake_remote_shell() -> Result<()> {
             "ssh_connect",
             json!({
                 "host_alias": "devbox",
+                "auth_kind": "config_alias",
                 "user": "alice",
                 "description": "ssh file e2e"
             }),
@@ -34,11 +35,11 @@ async fn ssh_file_tools_operate_against_fake_remote_shell() -> Result<()> {
             json!({
                 "connection_id": connected.connection_id,
                 "path": remote_dir,
-                "parents": true
+                "create_parents": true
             }),
         )
         .await?;
-    ensure!(created.parents);
+    ensure!(created.create_parents);
     ensure!(std::path::Path::new(&created.path).is_dir());
 
     let written = harness
@@ -48,7 +49,7 @@ async fn ssh_file_tools_operate_against_fake_remote_shell() -> Result<()> {
                 "connection_id": connected.connection_id,
                 "path": remote_file,
                 "content": "alpha\nbeta\n",
-                "create_parent": true
+                "create_parents": true
             }),
         )
         .await?;

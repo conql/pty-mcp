@@ -25,6 +25,7 @@ async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()>
             "ssh_connect",
             json!({
                 "host_alias": "devbox",
+                "auth_kind": "config_alias",
                 "user": "alice",
                 "description": "ssh mount e2e"
             }),
@@ -50,14 +51,14 @@ async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()>
             json!({
                 "connection_id": connected.connection_id,
                 "remote_path": "/srv/project",
-                "local_path": local_path,
+                "target_path": local_path,
                 "description": "ssh mount e2e"
             }),
         )
         .await?;
-    ensure!(std::path::Path::new(&mounted.local_path).exists());
+    ensure!(std::path::Path::new(&mounted.target_path).exists());
     ensure!(
-        std::path::Path::new(&mounted.local_path)
+        std::path::Path::new(&mounted.target_path)
             .join(".sshfs-mounted")
             .exists()
     );
@@ -74,7 +75,7 @@ async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()>
         .await?;
     ensure!(disconnected.closed_sessions == 1);
     ensure!(disconnected.closed_mounts == 1);
-    ensure!(!std::path::Path::new(&mounted.local_path).exists());
+    ensure!(!std::path::Path::new(&mounted.target_path).exists());
 
     let listed = harness
         .call_tool_typed::<PtyListResponse>("pty_list", json!({}))
@@ -105,7 +106,7 @@ async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()>
     }
     assert_text_contains(
         &harness.fake_bins().read_umount_log(),
-        &mounted.local_path,
+        &mounted.target_path,
         "umount log",
     )?;
 
@@ -123,6 +124,7 @@ async fn ssh_unmount_cleans_managed_mounts_but_keeps_explicit_paths() -> Result<
             "ssh_connect",
             json!({
                 "host_alias": "devbox",
+                "auth_kind": "config_alias",
                 "user": "alice",
                 "description": "ssh mount cleanup e2e"
             }),
@@ -136,8 +138,8 @@ async fn ssh_unmount_cleans_managed_mounts_but_keeps_explicit_paths() -> Result<
             json!({
                 "connection_id": connected.connection_id,
                 "remote_path": "/srv/managed",
-                "local_path": managed_local_path,
-                "create_local_path": true,
+                "target_path": managed_local_path,
+                "create_target": true,
                 "description": "managed mount cleanup e2e"
             }),
         )
@@ -148,13 +150,13 @@ async fn ssh_unmount_cleans_managed_mounts_but_keeps_explicit_paths() -> Result<
             "ssh_unmount",
             json!({
                 "mount_id": managed_mount.mount_id,
-                "cleanup_local_path": true
+                "cleanup_target": true
             }),
         )
         .await?;
     ensure!(managed_unmounted.previous_status == SshMountStatus::Mounted);
     ensure!(managed_unmounted.current_status == SshMountStatus::Unmounted);
-    ensure!(managed_unmounted.cleanup_local_path);
+    ensure!(managed_unmounted.cleanup_target);
     ensure!(!managed_local_path.exists());
 
     let explicit_local_path = harness.workspace_root().join("explicit-cleanup");
@@ -165,7 +167,7 @@ async fn ssh_unmount_cleans_managed_mounts_but_keeps_explicit_paths() -> Result<
             json!({
                 "connection_id": connected.connection_id,
                 "remote_path": "/srv/explicit",
-                "local_path": explicit_local_path,
+                "target_path": explicit_local_path,
                 "description": "explicit mount cleanup e2e"
             }),
         )
@@ -176,13 +178,13 @@ async fn ssh_unmount_cleans_managed_mounts_but_keeps_explicit_paths() -> Result<
             "ssh_unmount",
             json!({
                 "mount_id": explicit_mount.mount_id,
-                "cleanup_local_path": true
+                "cleanup_target": true
             }),
         )
         .await?;
     ensure!(explicit_unmounted.previous_status == SshMountStatus::Mounted);
     ensure!(explicit_unmounted.current_status == SshMountStatus::Unmounted);
-    ensure!(!explicit_unmounted.cleanup_local_path);
+    ensure!(!explicit_unmounted.cleanup_target);
     ensure!(explicit_local_path.exists());
 
     let umount_log = harness.fake_bins().read_umount_log();
@@ -246,6 +248,7 @@ async fn ssh_mount_failure_is_visible_via_ssh_list_and_mount_resource() -> Resul
             "ssh_connect",
             json!({
                 "host_alias": "devbox",
+                "auth_kind": "config_alias",
                 "user": "alice",
                 "description": "mount failure visibility e2e"
             }),
@@ -258,8 +261,8 @@ async fn ssh_mount_failure_is_visible_via_ssh_list_and_mount_resource() -> Resul
             json!({
                 "connection_id": connected.connection_id,
                 "remote_path": "/srv/failing",
-                "local_path": harness.managed_mount_root().join("failing-mount"),
-                "create_local_path": true,
+                "target_path": harness.managed_mount_root().join("failing-mount"),
+                "create_target": true,
                 "description": "failing mount visibility e2e"
             }),
         )
@@ -338,6 +341,7 @@ async fn shutdown_automatically_unmounts_managed_mounts() -> Result<()> {
             "ssh_connect",
             json!({
                 "host_alias": "devbox",
+                "auth_kind": "config_alias",
                 "user": "alice",
                 "description": "shutdown unmount e2e"
             }),
@@ -350,14 +354,14 @@ async fn shutdown_automatically_unmounts_managed_mounts() -> Result<()> {
             json!({
                 "connection_id": connected.connection_id,
                 "remote_path": "/srv/shutdown",
-                "local_path": harness.managed_mount_root().join("shutdown-mount"),
-                "create_local_path": true,
+                "target_path": harness.managed_mount_root().join("shutdown-mount"),
+                "create_target": true,
                 "description": "shutdown cleanup mount e2e"
             }),
         )
         .await?;
     ensure!(
-        Path::new(&mounted.local_path)
+        Path::new(&mounted.target_path)
             .join(".sshfs-mounted")
             .exists()
     );

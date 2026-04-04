@@ -24,6 +24,14 @@ use crate::{
 
 use super::service::PtyMcpServer;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum LineNumberMode {
+    None,
+    Embedded,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PtySpawnRequest {
     #[schemars(description = "Executable or shell command to start in the new PTY session.")]
@@ -47,28 +55,33 @@ pub struct PtySpawnRequest {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Milliseconds to wait for first output before returning. Default: 0."
+        description = "Milliseconds to wait for first output before returning initial_output. Default: 0. Only used when capture_limit is set."
     )]
-    pub wait_for_output_ms: Option<u64>,
+    pub capture_wait_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Maximum number of output lines to include in initial_output. Default: server read limit."
+        description = "Maximum number of output lines to include in initial_output. This is the only switch that enables initial_output."
     )]
-    pub output_limit: Option<usize>,
+    pub capture_limit: Option<usize>,
     #[schemars(
-        description = "Read view for initial output. Allowed values: plain | ansi | raw. Default: plain."
+        description = "Read view for initial_output. Allowed values: plain | ansi | raw. Default: plain. Providing this without capture_limit is invalid."
     )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_view: Option<ReadView>,
+    #[schemars(
+        description = "How to include line numbers in initial_output.text. Allowed values: none | embedded. Default: none. raw output_view cannot be combined with embedded. Providing this without capture_limit is invalid."
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_number_mode: Option<LineNumberMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PtyOutputSnapshot {
+pub struct PtyOutputPage {
     pub offset: usize,
     pub returned: usize,
     pub has_more: bool,
     pub total_lines: usize,
-    pub lines: Vec<PtyReadLine>,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -83,7 +96,7 @@ pub struct PtySpawnResponse {
     pub cwd: Option<String>,
     pub started_at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_output: Option<PtyOutputSnapshot>,
+    pub initial_output: Option<PtyOutputPage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -126,30 +139,23 @@ pub struct PtyReadRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Whether regex matching should ignore case. Default: false.")]
     pub ignore_case: Option<bool>,
-    #[schemars(description = "Read view. Allowed values: plain | ansi | raw. Default: plain.")]
+    #[schemars(
+        description = "Read view. Allowed values: plain | ansi | raw. Default: plain. raw output_view cannot be combined with embedded line_number_mode."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub view: Option<ReadView>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PtyReadLine {
-    pub line_number: usize,
-    pub text: String,
+    pub output_view: Option<ReadView>,
+    #[schemars(
+        description = "How to include line numbers in page.text. Allowed values: none | embedded. Default: none. embedded prefixes each returned line as <line_number>\\t<text>. raw output_view cannot be combined with embedded."
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_number_mode: Option<LineNumberMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PtyReadResponse {
     pub session_id: SessionId,
     pub status: SessionStatus,
-    pub offset: usize,
-    pub returned: usize,
-    pub has_more: bool,
-    pub total_lines: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub first_line_number: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub line_numbers: Option<Vec<usize>>,
-    pub lines: String,
+    pub page: PtyOutputPage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -169,8 +175,7 @@ pub struct SshConnectRequest {
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub auth_kind: Option<SshAuthKind>,
+    pub auth_kind: SshAuthKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -211,9 +216,9 @@ impl JsonSchema for SshConnectRequest {
                     "description": "Absolute path to the SSH identity file. Required when auth_kind=identity_file."
                 },
                 "auth_kind": {
-                    "type": ["string", "null"],
-                    "enum": ["ssh_agent", "identity_file", "config_alias", null],
-                    "description": "Authentication mode. Allowed values: ssh_agent | identity_file | config_alias. Default: inferred from host_alias and identity_path."
+                    "type": "string",
+                    "enum": ["ssh_agent", "identity_file", "config_alias"],
+                    "description": "Authentication mode. Allowed values: ssh_agent | identity_file | config_alias. This field is required and never inferred."
                 },
                 "title": {
                     "type": ["string", "null"],
@@ -228,6 +233,7 @@ impl JsonSchema for SshConnectRequest {
                     "description": "Whether SSH host key verification should remain enabled. Default: true."
                 }
             },
+            "required": ["auth_kind"],
             "anyOf": [
                 {
                     "required": ["host_alias"],
@@ -245,6 +251,28 @@ impl JsonSchema for SshConnectRequest {
                             "type": "string",
                             "minLength": 1
                         }
+                    }
+                }
+            ],
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "auth_kind": { "const": "config_alias" }
+                        }
+                    },
+                    "then": {
+                        "required": ["host_alias"]
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "auth_kind": { "const": "identity_file" }
+                        }
+                    },
+                    "then": {
+                        "required": ["identity_path"]
                     }
                 }
             ]
@@ -307,19 +335,24 @@ pub struct SshSessionSpawnRequest {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Milliseconds to wait for first output before returning. Default: 0."
+        description = "Milliseconds to wait for first output before returning initial_output. Default: 0. Only used when capture_limit is set."
     )]
-    pub wait_for_output_ms: Option<u64>,
+    pub capture_wait_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Maximum number of output lines to include in initial_output. Default: server read limit."
+        description = "Maximum number of output lines to include in initial_output. This is the only switch that enables initial_output."
     )]
-    pub output_limit: Option<usize>,
+    pub capture_limit: Option<usize>,
     #[schemars(
-        description = "Read view for initial output. Allowed values: plain | ansi | raw. Default: plain."
+        description = "Read view for initial_output. Allowed values: plain | ansi | raw. Default: plain. Providing this without capture_limit is invalid."
     )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_view: Option<ReadView>,
+    #[schemars(
+        description = "How to include line numbers in initial_output.text. Allowed values: none | embedded. Default: none. raw output_view cannot be combined with embedded. Providing this without capture_limit is invalid."
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_number_mode: Option<LineNumberMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -351,19 +384,24 @@ pub struct SshExecRequest {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Milliseconds to wait for completion before returning status fields. If omitted, return immediately after spawn."
+        description = "Milliseconds to wait for completion before returning completed/exit fields. If omitted, return immediately after spawn."
     )]
-    pub wait_for_completion_ms: Option<u64>,
+    pub wait_timeout_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Maximum number of output lines to include in initial_output. Default: server read limit."
+        description = "Maximum number of output lines to include in initial_output. This is the only switch that enables initial_output."
     )]
-    pub output_limit: Option<usize>,
+    pub capture_limit: Option<usize>,
     #[schemars(
-        description = "Read view for returned output. Allowed values: plain | ansi | raw. Default: plain."
+        description = "Read view for initial_output. Allowed values: plain | ansi | raw. Default: plain. Providing this without capture_limit is invalid."
     )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_view: Option<ReadView>,
+    #[schemars(
+        description = "How to include line numbers in initial_output.text. Allowed values: none | embedded. Default: none. raw output_view cannot be combined with embedded. Providing this without capture_limit is invalid."
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_number_mode: Option<LineNumberMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -407,7 +445,7 @@ pub struct SshSessionSpawnResponse {
     pub remote_cwd: Option<String>,
     pub started_at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_output: Option<PtyOutputSnapshot>,
+    pub initial_output: Option<PtyOutputPage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -428,7 +466,7 @@ pub struct SshExecResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_signal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_output: Option<PtyOutputSnapshot>,
+    pub initial_output: Option<PtyOutputPage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -449,9 +487,9 @@ pub struct SshMountRequest {
     #[schemars(description = "Absolute remote path to mount.")]
     pub remote_path: String,
     #[schemars(
-        description = "Local mount target path. Must be inside the configured managed or allowed mount roots."
+        description = "Local mount target path. Must be absolute and inside the configured managed or allowed mount roots."
     )]
-    pub local_path: String,
+    pub target_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Mount the remote filesystem read-only. Default: false.")]
     pub read_only: Option<bool>,
@@ -462,9 +500,9 @@ pub struct SshMountRequest {
     pub backend: Option<SshMountBackend>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Create the local mount directory if it does not already exist. Default: true."
+        description = "Create the target_path directory if it does not already exist. Default: true."
     )]
-    pub create_local_path: Option<bool>,
+    pub create_target: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Optional short title for display in mount listings.")]
     pub title: Option<String>,
@@ -480,7 +518,7 @@ pub struct SshMountResponse {
     pub mount_id: SshMountId,
     pub connection_id: SshConnectionId,
     pub remote_path: String,
-    pub local_path: String,
+    pub target_path: String,
     pub backend: SshMountBackend,
     pub status: SshMountStatus,
     pub mounted_at: chrono::DateTime<chrono::Utc>,
@@ -489,10 +527,16 @@ pub struct SshMountResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshUnmountRequest {
     pub mount_id: SshMountId,
+    #[schemars(
+        description = "Force unmount when the platform backend supports it. Default: false."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<bool>,
+    #[schemars(
+        description = "Remove target_path after unmount only when the server determines cleanup is allowed. Default: false."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cleanup_local_path: Option<bool>,
+    pub cleanup_target: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -500,15 +544,21 @@ pub struct SshUnmountResponse {
     pub mount_id: SshMountId,
     pub previous_status: SshMountStatus,
     pub current_status: SshMountStatus,
-    pub local_path: String,
-    pub cleanup_local_path: bool,
+    pub target_path: String,
+    pub cleanup_target: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshDisconnectRequest {
     pub connection_id: SshConnectionId,
+    #[schemars(
+        description = "Force disconnect even when sessions are still running. Active mounts still require cleanup_mounts=true. Default: false."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<bool>,
+    #[schemars(
+        description = "Unmount active SSH mounts during a forced disconnect. Default: false."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cleanup_mounts: Option<bool>,
 }
@@ -552,7 +602,7 @@ pub struct SshWriteFileRequest {
     pub append: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Create parent directories before writing. Default: false.")]
-    pub create_parent: Option<bool>,
+    pub create_parents: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -601,14 +651,14 @@ pub struct SshMkdirRequest {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Create parent directories as needed. Default: false.")]
-    pub parents: Option<bool>,
+    pub create_parents: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshMkdirResponse {
     pub connection_id: SshConnectionId,
     pub path: String,
-    pub parents: bool,
+    pub create_parents: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -620,7 +670,10 @@ pub struct PtyKillRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<SignalKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cleanup: Option<bool>,
+    #[schemars(
+        description = "Remove the session metadata and buffered output after kill. Default: false."
+    )]
+    pub cleanup_session: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -628,7 +681,7 @@ pub struct PtyKillResponse {
     pub session_id: SessionId,
     pub previous_status: SessionStatus,
     pub current_status: SessionStatus,
-    pub cleanup: bool,
+    pub cleanup_session: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -669,6 +722,10 @@ fn tool_execution_error(error: anyhow::Error) -> CallToolResult {
     }))
 }
 
+fn invalid_params(message: impl Into<String>) -> ErrorData {
+    ErrorData::invalid_params(message.into(), None)
+}
+
 #[tool_router(router = tool_router, vis = "pub(crate)")]
 impl PtyMcpServer {
     #[tool(
@@ -680,9 +737,12 @@ impl PtyMcpServer {
         &self,
         Parameters(request): Parameters<PtySpawnRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let should_capture_initial_output = request.wait_for_output_ms.is_some()
-            || request.output_limit.is_some()
-            || request.output_view.is_some();
+        let capture_options = validate_capture_options(
+            request.capture_limit,
+            request.capture_wait_ms,
+            request.output_view,
+            request.line_number_mode,
+        )?;
         match self
             .app()
             .local()
@@ -697,16 +757,14 @@ impl PtyMcpServer {
             .await
         {
             Ok(summary) => {
-                let initial_output = if should_capture_initial_output {
+                let initial_output = if let Some(options) = capture_options {
                     capture_initial_output(
                         self.app(),
                         &summary.session_id,
-                        request.wait_for_output_ms.unwrap_or(0),
-                        request
-                            .output_limit
-                            .unwrap_or(self.app().config().default_read_limit)
-                            .max(1),
-                        resolve_buffer_view(request.output_view.unwrap_or(ReadView::Plain)),
+                        options.capture_wait_ms,
+                        options.limit,
+                        options.view,
+                        options.line_number_mode,
                     )
                     .await
                     .map_err(|error| ErrorData::internal_error(error.to_string(), None))?
@@ -772,6 +830,9 @@ impl PtyMcpServer {
         &self,
         Parameters(request): Parameters<PtyReadRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let view = request.output_view.unwrap_or(ReadView::Plain);
+        let line_number_mode = request.line_number_mode.unwrap_or(LineNumberMode::None);
+        validate_line_number_mode(view.clone(), line_number_mode)?;
         match self.app().local().read_session(
             &request.session_id,
             &BufferReadRequest {
@@ -782,11 +843,7 @@ impl PtyMcpServer {
                     .max(1),
                 pattern: request.pattern,
                 ignore_case: request.ignore_case.unwrap_or(false),
-                view: match request.view.unwrap_or(ReadView::Plain) {
-                    ReadView::Plain => BufferView::Plain,
-                    ReadView::Ansi => BufferView::Ansi,
-                    ReadView::Raw => BufferView::Raw,
-                },
+                view: resolve_buffer_view(view),
             },
         ) {
             Ok(page) => {
@@ -796,7 +853,11 @@ impl PtyMcpServer {
                     .get_session(&request.session_id)
                     .map(|summary| summary.status)
                     .unwrap_or(SessionStatus::Exited);
-                structured(&read_response_from_page(request.session_id, status, page))
+                structured(&PtyReadResponse {
+                    session_id: request.session_id,
+                    status,
+                    page: render_output_page(page, line_number_mode),
+                })
             }
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
@@ -822,6 +883,39 @@ impl PtyMcpServer {
         &self,
         Parameters(request): Parameters<SshConnectRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if matches!(request.auth_kind, SshAuthKind::ConfigAlias)
+            && request
+                .host_alias
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+        {
+            return Err(invalid_params(
+                "host_alias is required when auth_kind=config_alias",
+            ));
+        }
+        if matches!(request.auth_kind, SshAuthKind::IdentityFile)
+            && request
+                .identity_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+        {
+            return Err(invalid_params(
+                "identity_path is required when auth_kind=identity_file",
+            ));
+        }
+        if let Some(identity_path) = request.identity_path.as_deref() {
+            let path = std::path::Path::new(identity_path.trim());
+            if matches!(request.auth_kind, SshAuthKind::IdentityFile) && !path.is_absolute() {
+                return Err(invalid_params(format!(
+                    "identity_path must be an absolute path: identity_path={}",
+                    path.display()
+                )));
+            }
+        }
         match self
             .app()
             .ssh()
@@ -872,9 +966,12 @@ impl PtyMcpServer {
         &self,
         Parameters(request): Parameters<SshSessionSpawnRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let should_capture_initial_output = request.wait_for_output_ms.is_some()
-            || request.output_limit.is_some()
-            || request.output_view.is_some();
+        let capture_options = validate_capture_options(
+            request.capture_limit,
+            request.capture_wait_ms,
+            request.output_view,
+            request.line_number_mode,
+        )?;
         match self
             .app()
             .ssh()
@@ -893,16 +990,14 @@ impl PtyMcpServer {
             .await
         {
             Ok(spawned) => {
-                let initial_output = if should_capture_initial_output {
+                let initial_output = if let Some(options) = capture_options {
                     match capture_initial_output(
                         self.app(),
                         &spawned.session_id,
-                        request.wait_for_output_ms.unwrap_or(0),
-                        request
-                            .output_limit
-                            .unwrap_or(self.app().config().default_read_limit)
-                            .max(1),
-                        resolve_buffer_view(request.output_view.unwrap_or(ReadView::Plain)),
+                        options.capture_wait_ms,
+                        options.limit,
+                        options.view,
+                        options.line_number_mode,
                     )
                     .await
                     {
@@ -945,16 +1040,13 @@ impl PtyMcpServer {
         &self,
         Parameters(request): Parameters<SshExecRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let wait_for_completion_ms = request.wait_for_completion_ms;
-        let should_capture_initial_output = wait_for_completion_ms.is_some()
-            || request.output_limit.is_some()
-            || request.output_view.is_some();
-        let output_limit = request
-            .output_limit
-            .unwrap_or(self.app().config().default_read_limit)
-            .max(1);
-        let output_view =
-            resolve_buffer_view(request.output_view.clone().unwrap_or(ReadView::Plain));
+        let wait_timeout_ms = request.wait_timeout_ms;
+        let capture_options = validate_capture_options(
+            request.capture_limit,
+            None,
+            request.output_view,
+            request.line_number_mode,
+        )?;
         match self
             .app()
             .ssh()
@@ -971,7 +1063,7 @@ impl PtyMcpServer {
             .await
         {
             Ok(spawned) => {
-                let wait_outcome = if let Some(timeout_ms) = wait_for_completion_ms {
+                let wait_outcome = if let Some(timeout_ms) = wait_timeout_ms {
                     match self
                         .app()
                         .local()
@@ -996,18 +1088,14 @@ impl PtyMcpServer {
                     .get_session(&spawned.session_id)
                     .unwrap_or(spawned);
 
-                let initial_output = if should_capture_initial_output {
-                    let capture_wait_ms = if wait_outcome.is_some() {
-                        0
-                    } else {
-                        wait_for_completion_ms.unwrap_or(0)
-                    };
+                let initial_output = if let Some(options) = capture_options {
                     match capture_initial_output(
                         self.app(),
                         &latest.session_id,
-                        capture_wait_ms,
-                        output_limit,
-                        output_view,
+                        0,
+                        options.limit,
+                        options.view,
+                        options.line_number_mode,
                     )
                     .await
                     {
@@ -1095,10 +1183,10 @@ impl PtyMcpServer {
             .mount(AppSshMountRequest {
                 connection_id: request.connection_id,
                 remote_path: request.remote_path,
-                local_path: request.local_path,
+                target_path: request.target_path,
                 read_only: request.read_only.unwrap_or(false),
                 backend: request.backend,
-                create_local_path: request.create_local_path.unwrap_or(true),
+                create_target: request.create_target.unwrap_or(true),
                 title: request.title,
                 description: request.description,
             })
@@ -1108,7 +1196,7 @@ impl PtyMcpServer {
                 mount_id: mount.mount_id,
                 connection_id: mount.connection_id,
                 remote_path: mount.remote_path,
-                local_path: mount.local_path,
+                target_path: mount.local_path,
                 backend: mount.backend,
                 status: mount.status,
                 mounted_at: mount.mounted_at,
@@ -1132,7 +1220,7 @@ impl PtyMcpServer {
             .unmount(AppSshUnmountRequest {
                 mount_id: request.mount_id,
                 force: request.force.unwrap_or(false),
-                cleanup_local_path: request.cleanup_local_path.unwrap_or(false),
+                cleanup_target: request.cleanup_target.unwrap_or(false),
             })
             .await
         {
@@ -1140,8 +1228,8 @@ impl PtyMcpServer {
                 mount_id: result.mount.mount_id,
                 previous_status: result.previous_status,
                 current_status: result.mount.status,
-                local_path: result.mount.local_path,
-                cleanup_local_path: result.cleanup_local_path,
+                target_path: result.mount.local_path,
+                cleanup_target: result.cleanup_target,
             }),
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
@@ -1223,7 +1311,7 @@ impl PtyMcpServer {
                 &request.path,
                 &request.content,
                 request.append.unwrap_or(false),
-                request.create_parent.unwrap_or(false),
+                request.create_parents.unwrap_or(false),
             )
             .await
         {
@@ -1295,14 +1383,14 @@ impl PtyMcpServer {
             .mkdir(
                 &request.connection_id,
                 &request.path,
-                request.parents.unwrap_or(false),
+                request.create_parents.unwrap_or(false),
             )
             .await
         {
             Ok(result) => structured(&SshMkdirResponse {
                 connection_id: result.connection_id,
                 path: result.path,
-                parents: result.parents,
+                create_parents: result.create_parents,
             }),
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
@@ -1323,7 +1411,7 @@ impl PtyMcpServer {
             .kill_session(
                 &request.session_id,
                 request.signal.unwrap_or(SignalKind::Sigterm),
-                request.cleanup.unwrap_or(false),
+                request.cleanup_session.unwrap_or(false),
             )
             .await
         {
@@ -1331,7 +1419,7 @@ impl PtyMcpServer {
                 session_id: outcome.session_id,
                 previous_status: outcome.previous_status,
                 current_status: outcome.current_status,
-                cleanup: outcome.cleanup,
+                cleanup_session: outcome.cleanup,
             }),
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }
@@ -1382,80 +1470,80 @@ fn resolve_buffer_view(view: ReadView) -> BufferView {
     }
 }
 
-fn output_snapshot_from_page(page: BufferReadPage) -> PtyOutputSnapshot {
-    PtyOutputSnapshot {
+fn render_output_page(page: BufferReadPage, line_number_mode: LineNumberMode) -> PtyOutputPage {
+    let text = match line_number_mode {
+        LineNumberMode::None => page
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        LineNumberMode::Embedded => page
+            .lines
+            .iter()
+            .map(|line| format!("{}\t{}", line.line_number, line.text))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+
+    PtyOutputPage {
         offset: page.offset,
         returned: page.returned,
         has_more: page.has_more,
         total_lines: page.total_lines,
-        lines: page
-            .lines
-            .into_iter()
-            .map(|line| PtyReadLine {
-                line_number: line.line_number,
-                text: line.text,
-            })
-            .collect(),
+        text,
     }
 }
 
-fn read_response_from_page(
-    session_id: SessionId,
-    status: SessionStatus,
-    page: BufferReadPage,
-) -> PtyReadResponse {
-    let mut first_line_number = None;
-    let mut previous_line_number = None;
-    let mut collected_line_numbers: Option<Vec<usize>> = None;
+#[derive(Debug, Clone, Copy)]
+struct CaptureOptions {
+    limit: usize,
+    capture_wait_ms: u64,
+    view: BufferView,
+    line_number_mode: LineNumberMode,
+}
 
-    for line in &page.lines {
-        let line_number = line.line_number;
-        if first_line_number.is_none() {
-            first_line_number = Some(line_number);
-        }
-
-        match previous_line_number {
-            Some(previous) if line_number != previous + 1 => {
-                let numbers = collected_line_numbers.get_or_insert_with(|| {
-                    let mut numbers = Vec::with_capacity(page.lines.len());
-                    if let Some(first) = first_line_number {
-                        let mut current = first;
-                        while current <= previous {
-                            numbers.push(current);
-                            current += 1;
-                        }
-                    }
-                    numbers
-                });
-                numbers.push(line_number);
-            }
-            _ => {
-                if let Some(numbers) = collected_line_numbers.as_mut() {
-                    numbers.push(line_number);
-                }
-            }
-        }
-
-        previous_line_number = Some(line_number);
+fn validate_capture_options(
+    capture_limit: Option<usize>,
+    capture_wait_ms: Option<u64>,
+    output_view: Option<ReadView>,
+    line_number_mode: Option<LineNumberMode>,
+) -> Result<Option<CaptureOptions>, ErrorData> {
+    if capture_limit.is_none()
+        && (capture_wait_ms.is_some() || output_view.is_some() || line_number_mode.is_some())
+    {
+        return Err(invalid_params(
+            "capture_limit is required when capture_wait_ms, output_view, or line_number_mode is provided",
+        ));
     }
-    let lines = page
-        .lines
-        .iter()
-        .map(|line| line.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
 
-    PtyReadResponse {
-        session_id,
-        status,
-        offset: page.offset,
-        returned: page.returned,
-        has_more: page.has_more,
-        total_lines: page.total_lines,
-        first_line_number,
-        line_numbers: collected_line_numbers,
-        lines,
+    let Some(limit) = capture_limit else {
+        return Ok(None);
+    };
+
+    let view = output_view.unwrap_or(ReadView::Plain);
+    let line_number_mode = line_number_mode.unwrap_or(LineNumberMode::None);
+    validate_line_number_mode(view.clone(), line_number_mode)?;
+
+    Ok(Some(CaptureOptions {
+        limit: limit.max(1),
+        capture_wait_ms: capture_wait_ms.unwrap_or(0),
+        view: resolve_buffer_view(view),
+        line_number_mode,
+    }))
+}
+
+fn validate_line_number_mode(
+    output_view: ReadView,
+    line_number_mode: LineNumberMode,
+) -> Result<(), ErrorData> {
+    if matches!(output_view, ReadView::Raw) && matches!(line_number_mode, LineNumberMode::Embedded)
+    {
+        return Err(invalid_params(
+            "line_number_mode=embedded cannot be used with output_view=raw",
+        ));
     }
+    Ok(())
 }
 
 async fn capture_initial_output(
@@ -1464,7 +1552,8 @@ async fn capture_initial_output(
     wait_for_output_ms: u64,
     limit: usize,
     view: BufferView,
-) -> anyhow::Result<Option<PtyOutputSnapshot>> {
+    line_number_mode: LineNumberMode,
+) -> anyhow::Result<Option<PtyOutputPage>> {
     let started = tokio::time::Instant::now();
 
     loop {
@@ -1480,7 +1569,7 @@ async fn capture_initial_output(
         )?;
 
         if page.returned > 0 {
-            return Ok(Some(output_snapshot_from_page(page)));
+            return Ok(Some(render_output_page(page, line_number_mode)));
         }
 
         if started.elapsed() >= std::time::Duration::from_millis(wait_for_output_ms) {

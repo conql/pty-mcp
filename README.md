@@ -117,32 +117,61 @@ flowchart LR
 - `pty_spawn`: start a local PTY process
 - `pty_write`: send input to a running PTY session
 - `pty_read`: page through retained output, optionally filtering by regex pattern
-  - returns compact text plus line-number metadata: `first_line_number` always when available, and `line_numbers` only when the result is non-contiguous
+  - returns a single `page.text` string instead of per-line objects
 - `pty_list`: list known PTY sessions
 - `pty_kill`: stop a PTY session with `sigint`, `sigterm`, or `sigkill`
 - `pty_wait`: wait for a PTY session to exit
 
-`pty_read` and initial output capture support three views:
+### Output Model
+
+PTY reads and captured startup output now use one canonical page shape:
+
+- `offset`
+- `returned`
+- `has_more`
+- `total_lines`
+- `text`
+
+Default behavior is agent-first and compact:
+
+- use `text` without line numbers by default
+- request `line_number_mode=embedded` only when you need exact references
+- embedded numbering prefixes each returned line as `<line_number>\t<text>`
+- per-line object arrays are no longer returned
+- `capture_limit` is the only switch that enables `initial_output`
+
+`pty_read` and initial output capture support three `output_view` values:
 
 - `plain`: ANSI stripped text
 - `ansi`: ANSI-preserving text
 - `raw`: raw buffer view
 
+`line_number_mode` supports:
+
+- `none`: return plain `text`
+- `embedded`: prefix each returned line as `<line_number>\t<text>`
+
+Constraint:
+
+- `output_view=raw` cannot be combined with `line_number_mode=embedded`
+
 ### SSH tools
 
 - `ssh_connect`: create or reuse an SSH connection handle
   - provide `host` or `host_alias`
-  - optional `auth_kind` values: `ssh_agent`, `identity_file`, `config_alias`
+  - required `auth_kind` values: `ssh_agent`, `identity_file`, `config_alias`
 - `ssh_list`: list SSH connections and mounts
 - `ssh_session_spawn`: start a remote PTY session over an existing SSH connection
-  - optional `wait_for_output_ms`: wait briefly for initial remote PTY output and return it inline as `initial_output`
-  - optional `output_limit`: cap how much remote PTY output is captured and included in `initial_output`
-  - optional `output_view`: choose the format of captured `initial_output` (`plain`, `ansi`, or `raw`), with the same semantics as `pty_read` and initial output capture
+  - optional `capture_wait_ms`: wait briefly for initial remote PTY output before returning `initial_output`
+  - optional `capture_limit`: cap how much remote PTY output is captured and included in `initial_output`
+  - optional `output_view`: choose the format of captured `initial_output` (`plain`, `ansi`, or `raw`)
+  - optional `line_number_mode`: choose `none` or `embedded` for captured `initial_output.text`
 - `ssh_run`: run a one-shot remote script and return `stdout`, `stderr`, and exit status directly
   - optional `max_output_bytes`: cap combined captured output, default `262144`
 - `ssh_exec`: run a remote script over an existing SSH connection
   - use this when you want the result attached to a PTY session for later `pty_wait` / `pty_read`
-  - optional `wait_for_completion_ms`: wait briefly for the script to finish and return completion state, exit code, and `initial_output` inline
+  - optional `wait_timeout_ms`: wait briefly for the script to finish and return completion state and exit fields inline
+  - optional `capture_limit`: return `initial_output` using the same compact page model
   - if the script does not finish within that window, use `pty_wait` and `pty_read` with the returned `session_id`
 - `ssh_read_file`: read a UTF-8 text file from the remote host
   - optional `max_bytes`: allowed range `1..=524288`, default `131072`
@@ -150,8 +179,12 @@ flowchart LR
   - `content` must be UTF-8 text and is capped at `262144` bytes
 - `ssh_list_dir`: list one remote directory level
 - `ssh_mkdir`: create a remote directory
+- `ssh_mkdir.create_parents`: create parent directories as needed
 - `ssh_mount`: mount a remote path locally through `sshfs`
+- `ssh_mount.target_path`: local mount target path
+- `ssh_mount.create_target`: create the local mount target directory when needed
 - `ssh_unmount`: unmount a mounted remote path
+- `ssh_unmount.cleanup_target`: remove the target path only when cleanup is allowed
 - `ssh_disconnect`: disconnect and optionally clean up related resources
 
 #### SSH mount requirements

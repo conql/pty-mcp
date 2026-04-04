@@ -12,7 +12,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct SshConnectValidationInput<'a> {
     pub target: &'a SshTarget,
-    pub auth_kind: Option<SshAuthKind>,
+    pub auth_kind: SshAuthKind,
     pub identity_path: Option<&'a str>,
 }
 
@@ -62,7 +62,7 @@ impl SshGuard {
         self.validate_connect_target(input.target)?;
         self.validate_host_user_port(config, input.target)?;
 
-        let auth_kind = resolve_auth_kind(input.target, input.auth_kind, input.identity_path)?;
+        let auth_kind = input.auth_kind;
         self.validate_auth_kind(config, &auth_kind, input.target)?;
         let identity_path = validate_identity_path(&auth_kind, input.identity_path)?;
 
@@ -176,30 +176,6 @@ impl SshGuard {
 
         Ok(())
     }
-}
-
-fn resolve_auth_kind(
-    target: &SshTarget,
-    auth_kind: Option<SshAuthKind>,
-    identity_path: Option<&str>,
-) -> Result<SshAuthKind> {
-    if let Some(auth_kind) = auth_kind {
-        return Ok(auth_kind);
-    }
-
-    if target
-        .host_alias
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-    {
-        return Ok(SshAuthKind::ConfigAlias);
-    }
-
-    if identity_path.is_some_and(|path| !path.trim().is_empty()) {
-        return Ok(SshAuthKind::IdentityFile);
-    }
-
-    Ok(SshAuthKind::SshAgent)
 }
 
 fn validate_identity_path(

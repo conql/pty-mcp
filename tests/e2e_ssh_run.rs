@@ -60,6 +60,7 @@ async fn ssh_run_executes_over_existing_connection_without_creating_pty_session(
             "ssh_connect",
             json!({
                 "host_alias": "devbox",
+                "auth_kind": "config_alias",
                 "user": "alice",
                 "description": "ssh run e2e"
             }),
@@ -104,6 +105,7 @@ async fn ssh_run_preserves_nonzero_exit_and_stderr() -> Result<()> {
             "ssh_connect",
             json!({
                 "host_alias": "devbox",
+                "auth_kind": "config_alias",
                 "user": "alice",
                 "description": "ssh run failure e2e"
             }),

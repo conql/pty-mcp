@@ -21,7 +21,7 @@ pub struct SshConnectRequest {
     pub host: Option<String>,
     pub user: Option<String>,
     pub port: Option<u16>,
-    pub auth_kind: Option<SshAuthKind>,
+    pub auth_kind: SshAuthKind,
     pub identity_path: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
@@ -92,10 +92,10 @@ pub struct SshRunResult {
 pub struct SshMountRequest {
     pub connection_id: SshConnectionId,
     pub remote_path: String,
-    pub local_path: String,
+    pub target_path: String,
     pub read_only: bool,
     pub backend: Option<crate::ssh::SshMountBackend>,
-    pub create_local_path: bool,
+    pub create_target: bool,
     pub title: Option<String>,
     pub description: Option<String>,
 }
@@ -104,14 +104,14 @@ pub struct SshMountRequest {
 pub struct SshUnmountRequest {
     pub mount_id: SshMountId,
     pub force: bool,
-    pub cleanup_local_path: bool,
+    pub cleanup_target: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct SshUnmountResult {
     pub mount: SshMountSummary,
     pub previous_status: SshMountStatus,
-    pub cleanup_local_path: bool,
+    pub cleanup_target: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -172,5 +172,5 @@ pub struct SshListDirectoryResult {
 pub struct SshMkdirResult {
     pub connection_id: SshConnectionId,
     pub path: String,
-    pub parents: bool,
+    pub create_parents: bool,
 }

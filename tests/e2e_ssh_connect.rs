@@ -17,6 +17,7 @@ async fn ssh_connect_reuses_existing_connection_through_real_binary() -> Result<
             "ssh_connect",
             json!({
                 "host": "devbox.example.com",
+                "auth_kind": "ssh_agent",
                 "user": "alice",
                 "description": "ssh connect e2e"
             }),
@@ -29,6 +30,7 @@ async fn ssh_connect_reuses_existing_connection_through_real_binary() -> Result<
             "ssh_connect",
             json!({
                 "host": "devbox.example.com",
+                "auth_kind": "ssh_agent",
                 "user": "alice",
                 "description": "ssh connect e2e"
             }),
@@ -58,6 +60,7 @@ async fn ssh_connect_fails_when_ssh_capability_is_missing_through_real_binary() 
             "ssh_connect",
             json!({
                 "host": "devbox.example.com",
+                "auth_kind": "ssh_agent",
                 "user": "alice",
                 "description": "missing ssh capability"
             }),
@@ -88,6 +91,7 @@ async fn ssh_connect_enforces_host_user_port_and_auth_policy_through_real_binary
             envs: &[("PTY_MCP_SSH_DENIED_HOSTS", "prod.internal")],
             args: json!({
                 "host": "prod.internal",
+                "auth_kind": "ssh_agent",
                 "user": "alice",
                 "description": "host denied policy"
             }),
@@ -98,6 +102,7 @@ async fn ssh_connect_enforces_host_user_port_and_auth_policy_through_real_binary
             envs: &[("PTY_MCP_SSH_ALLOWED_USERS", "deploy")],
             args: json!({
                 "host": "devbox.example.com",
+                "auth_kind": "ssh_agent",
                 "user": "alice",
                 "description": "user allowlist policy"
             }),
@@ -111,6 +116,7 @@ async fn ssh_connect_enforces_host_user_port_and_auth_policy_through_real_binary
             ],
             args: json!({
                 "host": "devbox.example.com",
+                "auth_kind": "ssh_agent",
                 "user": "alice",
                 "port": 22,
                 "description": "port range policy"

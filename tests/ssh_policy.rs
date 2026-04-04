@@ -22,7 +22,7 @@ fn denied_hosts_are_rejected() {
                     user: Some("alice".to_string()),
                     port: Some(22),
                 },
-                auth_kind: Some(SshAuthKind::SshAgent),
+                auth_kind: SshAuthKind::SshAgent,
                 identity_path: None,
             },
         )
@@ -50,7 +50,7 @@ fn allowlisted_users_are_enforced() {
                     user: Some("alice".to_string()),
                     port: Some(22),
                 },
-                auth_kind: Some(SshAuthKind::SshAgent),
+                auth_kind: SshAuthKind::SshAgent,
                 identity_path: None,
             },
         )
@@ -79,7 +79,7 @@ fn port_policy_range_is_enforced() {
                     user: Some("alice".to_string()),
                     port: Some(22),
                 },
-                auth_kind: Some(SshAuthKind::SshAgent),
+                auth_kind: SshAuthKind::SshAgent,
                 identity_path: None,
             },
         )

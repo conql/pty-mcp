@@ -7,11 +7,11 @@ use super::{
     types::{SshMountRequest, SshUnmountRequest, SshUnmountResult},
 };
 
-fn mount_description(description: Option<String>, remote_path: &str, local_path: &str) -> String {
+fn mount_description(description: Option<String>, remote_path: &str, target_path: &str) -> String {
     description
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| format!("SSH mount: {remote_path} -> {local_path}"))
+        .unwrap_or_else(|| format!("SSH mount: {remote_path} -> {target_path}"))
 }
 
 impl SshService {
@@ -28,18 +28,20 @@ impl SshService {
         let backend = request
             .backend
             .unwrap_or(crate::ssh::SshMountBackend::Sshfs);
-        let local_path = self.context.resolve_mount_local_path(&request.local_path)?;
+        let target_path = self
+            .context
+            .resolve_mount_local_path(&request.target_path)?;
         let validated = self.context.ssh_guard.validate_mount_request(
             &self.context.ssh_config,
             crate::ssh::guard::SshMountValidationInput {
-                local_path: &local_path,
+                local_path: &target_path,
                 remote_path: &request.remote_path,
             },
         )?;
 
         let created_local_path = self
             .context
-            .ensure_mount_local_path(&validated.local_path, request.create_local_path)?;
+            .ensure_mount_local_path(&validated.local_path, request.create_target)?;
         let mount = crate::ssh::SshMountSummary {
             mount_id: crate::ssh::SshMountId::new(),
             title: request.title,
@@ -134,7 +136,7 @@ impl SshService {
 
         match result {
             Ok(()) => {
-                let cleanup_local_path = if request.cleanup_local_path {
+                let cleanup_local_path = if request.cleanup_target {
                     match self
                         .context
                         .cleanup_mount_local_path_if_allowed(&mount, &context)
@@ -160,7 +162,7 @@ impl SshService {
                 Ok(SshUnmountResult {
                     mount: unmounted,
                     previous_status,
-                    cleanup_local_path,
+                    cleanup_target: cleanup_local_path,
                 })
             }
             Err(error) => {
@@ -295,7 +297,7 @@ mod tests {
             .unmount(SshUnmountRequest {
                 mount_id: mount.mount_id.clone(),
                 force: false,
-                cleanup_local_path: true,
+                cleanup_target: true,
             })
             .await;
 

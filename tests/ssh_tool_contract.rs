@@ -388,9 +388,10 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
         .get("properties")
         .and_then(Value::as_object)
         .expect("ssh_exec properties");
-    assert!(exec_properties.contains_key("wait_for_completion_ms"));
-    assert!(exec_properties.contains_key("output_limit"));
+    assert!(exec_properties.contains_key("wait_timeout_ms"));
+    assert!(exec_properties.contains_key("capture_limit"));
     assert!(exec_properties.contains_key("output_view"));
+    assert!(exec_properties.contains_key("line_number_mode"));
     assert!(
         !session_spawn
             .input_schema
@@ -404,16 +405,17 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
         .get("properties")
         .and_then(Value::as_object)
         .expect("ssh_session_spawn properties");
-    assert!(session_spawn_properties.contains_key("wait_for_output_ms"));
-    assert!(session_spawn_properties.contains_key("output_limit"));
+    assert!(session_spawn_properties.contains_key("capture_wait_ms"));
+    assert!(session_spawn_properties.contains_key("capture_limit"));
     assert!(session_spawn_properties.contains_key("output_view"));
+    assert!(session_spawn_properties.contains_key("line_number_mode"));
 
     let mount_required = mount
         .input_schema
         .get("required")
         .and_then(Value::as_array)
         .expect("ssh_mount should expose required fields");
-    assert!(mount_required.contains(&serde_json::json!("local_path")));
+    assert!(mount_required.contains(&serde_json::json!("target_path")));
 
     let read_required = read_file
         .input_schema
@@ -463,6 +465,7 @@ async fn ssh_connect_and_ssh_list_support_reuse_flow() -> anyhow::Result<()> {
     let client = DummyClient.serve(client_transport).await?;
     let connect_args = serde_json::json!({
         "host_alias": "devbox",
+        "auth_kind": "config_alias",
         "user": "alice",
         "title": "Devbox",
         "description": "ssh connect contract"
@@ -650,6 +653,7 @@ async fn ssh_connect_reports_capability_unavailable_when_ssh_missing() -> anyhow
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host": "devbox.example.com",
+                    "auth_kind": "ssh_agent",
                     "user": "alice",
                     "description": "missing ssh capability"
                 })
@@ -675,8 +679,8 @@ async fn ssh_connect_reports_capability_unavailable_when_ssh_missing() -> anyhow
 
 #[cfg(unix)]
 #[tokio::test]
-async fn ssh_mount_requires_local_path_in_tool_contract() -> anyhow::Result<()> {
-    let sandbox = TempDirGuard::new("mount_requires_local_path")?;
+async fn ssh_mount_requires_target_path_in_tool_contract() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("mount_requires_target_path")?;
     let app = Arc::new(AppState::new(mount_feature_available_config(&sandbox)?));
     let mut connection = app.ssh().create_placeholder_connection(default_target());
     connection.status = SshConnectionStatus::Ready;
@@ -696,7 +700,7 @@ async fn ssh_mount_requires_local_path_in_tool_contract() -> anyhow::Result<()> 
                 serde_json::json!({
                     "connection_id": connection.connection_id,
                     "remote_path": "/srv/project",
-                    "description": "missing local path"
+                    "description": "missing target path"
                 })
                 .as_object()
                 .expect("mount args object")
@@ -704,8 +708,8 @@ async fn ssh_mount_requires_local_path_in_tool_contract() -> anyhow::Result<()> 
             ),
         )
         .await
-        .expect_err("missing local_path should fail during parameter validation");
-    assert!(error.to_string().contains("missing field `local_path`"));
+        .expect_err("missing target_path should fail during parameter validation");
+    assert!(error.to_string().contains("missing field `target_path`"));
 
     client.cancel().await?;
     server_handle.await??;
@@ -753,6 +757,7 @@ async fn ssh_session_spawn_reuses_pty_path_and_enriches_pty_list() -> anyhow::Re
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "ssh session spawn contract"
                 })
@@ -775,8 +780,8 @@ async fn ssh_session_spawn_reuses_pty_path_and_enriches_pty_list() -> anyhow::Re
                     "env": {"TERM":"xterm-256color"},
                     "interactive": true,
                     "description": "remote shell",
-                    "wait_for_output_ms": 500,
-                    "output_limit": 20
+                    "capture_wait_ms": 500,
+                    "capture_limit": 20
                 })
                 .as_object()
                 .expect("session spawn args object")
@@ -790,12 +795,12 @@ async fn ssh_session_spawn_reuses_pty_path_and_enriches_pty_list() -> anyhow::Re
     assert_eq!(spawned.transport, pty_mcp::session::SessionTransport::Ssh);
     assert_eq!(spawned.remote_cwd.as_deref(), Some("/srv/project"));
     assert_eq!(spawned.target_summary.as_deref(), Some("alice@devbox"));
-    assert!(spawned.initial_output.as_ref().is_some_and(|snapshot| {
-        snapshot
-            .lines
-            .iter()
-            .any(|line| line.text.contains("remote-ready"))
-    }));
+    assert!(
+        spawned
+            .initial_output
+            .as_ref()
+            .is_some_and(|snapshot| { snapshot.text.contains("remote-ready") })
+    );
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -849,6 +854,7 @@ async fn ssh_exec_runs_shell_snippets_and_session_spawn_keeps_argv_literal() -> 
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "ssh exec contract"
                 })
@@ -883,7 +889,13 @@ async fn ssh_exec_runs_shell_snippets_and_session_spawn_keeps_argv_literal() -> 
     wait_for_session_exit(&client, &exec_spawned.session_id).await?;
     let exec_output = read_session_output(&client, &exec_spawned.session_id).await?;
     let home = std::env::var("HOME").expect("HOME should be set for shell execution test");
-    assert!(exec_output.lines.lines().any(|line| line.trim() == home));
+    assert!(
+        exec_output
+            .page
+            .text
+            .lines()
+            .any(|line| line.trim() == home)
+    );
 
     let argv_spawned = client
         .call_tool(
@@ -905,7 +917,13 @@ async fn ssh_exec_runs_shell_snippets_and_session_spawn_keeps_argv_literal() -> 
 
     wait_for_session_exit(&client, &argv_spawned.session_id).await?;
     let argv_output = read_session_output(&client, &argv_spawned.session_id).await?;
-    assert!(argv_output.lines.lines().any(|line| line.trim() == "$HOME"));
+    assert!(
+        argv_output
+            .page
+            .text
+            .lines()
+            .any(|line| line.trim() == "$HOME")
+    );
 
     client.cancel().await?;
     server_handle.await??;
@@ -938,6 +956,7 @@ async fn ssh_run_returns_direct_output_without_creating_session() -> anyhow::Res
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "ssh run contract"
                 })
@@ -1014,6 +1033,7 @@ async fn ssh_run_enforces_max_output_bytes() -> anyhow::Result<()> {
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "ssh run output limit contract"
                 })
@@ -1076,6 +1096,7 @@ async fn ssh_exec_can_wait_briefly_and_return_completed_result() -> anyhow::Resu
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "ssh exec wait contract"
                 })
@@ -1094,8 +1115,8 @@ async fn ssh_exec_can_wait_briefly_and_return_completed_result() -> anyhow::Resu
                     "connection_id": connected.connection_id,
                     "script": "printf 'done\\n'",
                     "description": "shell script over ssh",
-                    "wait_for_completion_ms": 500,
-                    "output_limit": 20
+                    "wait_timeout_ms": 500,
+                    "capture_limit": 20
                 })
                 .as_object()
                 .expect("ssh_exec args object")
@@ -1111,7 +1132,7 @@ async fn ssh_exec_can_wait_briefly_and_return_completed_result() -> anyhow::Resu
     assert!(
         exec.initial_output
             .as_ref()
-            .is_some_and(|snapshot| snapshot.lines.iter().any(|line| line.text.contains("done")))
+            .is_some_and(|snapshot| snapshot.text.contains("done"))
     );
 
     client.cancel().await?;
@@ -1145,6 +1166,7 @@ async fn ssh_exec_wait_timeout_returns_session_without_completion() -> anyhow::R
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "ssh exec timeout contract"
                 })
@@ -1163,8 +1185,8 @@ async fn ssh_exec_wait_timeout_returns_session_without_completion() -> anyhow::R
                     "connection_id": connected.connection_id,
                     "script": "printf 'start\\n'; sleep 1; printf 'finish\\n'",
                     "description": "shell script over ssh",
-                    "wait_for_completion_ms": 50,
-                    "output_limit": 20
+                    "wait_timeout_ms": 50,
+                    "capture_limit": 20
                 })
                 .as_object()
                 .expect("ssh_exec args object")
@@ -1182,8 +1204,8 @@ async fn ssh_exec_wait_timeout_returns_session_without_completion() -> anyhow::R
     assert!(waited.completed);
 
     let output = read_session_output(&client, &exec.session_id).await?;
-    assert!(output.lines.contains("start"));
-    assert!(output.lines.contains("finish"));
+    assert!(output.page.text.contains("start"));
+    assert!(output.page.text.contains("finish"));
 
     client.cancel().await?;
     server_handle.await??;
@@ -1232,6 +1254,7 @@ async fn ssh_disconnect_force_cleans_up_session_and_mounts() -> anyhow::Result<(
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "disconnect contract"
                 })
@@ -1267,7 +1290,7 @@ async fn ssh_disconnect_force_cleans_up_session_and_mounts() -> anyhow::Result<(
                 serde_json::json!({
                     "connection_id": connected.connection_id,
                     "remote_path": "/srv/project",
-                    "local_path": managed_root.join("disconnect-mount"),
+                    "target_path": managed_root.join("disconnect-mount"),
                     "description": "remote mount for disconnect"
                 })
                 .as_object()
@@ -1277,7 +1300,7 @@ async fn ssh_disconnect_force_cleans_up_session_and_mounts() -> anyhow::Result<(
         )
         .await?
         .into_typed::<SshMountResponse>()?;
-    assert!(Path::new(&mounted.local_path).exists());
+    assert!(Path::new(&mounted.target_path).exists());
 
     let disconnected = client
         .call_tool(
@@ -1303,7 +1326,7 @@ async fn ssh_disconnect_force_cleans_up_session_and_mounts() -> anyhow::Result<(
     );
     assert_eq!(disconnected.closed_sessions, 1);
     assert_eq!(disconnected.closed_mounts, 1);
-    assert!(!Path::new(&mounted.local_path).exists());
+    assert!(!Path::new(&mounted.target_path).exists());
 
     let listed = client
         .call_tool(CallToolRequestParams::new("pty_list"))
@@ -1347,6 +1370,7 @@ async fn ssh_file_and_directory_tools_operate_over_existing_connection() -> anyh
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "ssh file tools contract"
                 })
@@ -1364,7 +1388,7 @@ async fn ssh_file_and_directory_tools_operate_over_existing_connection() -> anyh
                 serde_json::json!({
                     "connection_id": connected.connection_id,
                     "path": sandbox.path.join("remote/nested"),
-                    "parents": true
+                    "create_parents": true
                 })
                 .as_object()
                 .expect("ssh_mkdir args object")
@@ -1373,7 +1397,7 @@ async fn ssh_file_and_directory_tools_operate_over_existing_connection() -> anyh
         )
         .await?
         .into_typed::<SshMkdirResponse>()?;
-    assert!(created_dir.parents);
+    assert!(created_dir.create_parents);
     assert!(Path::new(&created_dir.path).is_dir());
 
     let written = client
@@ -1383,7 +1407,7 @@ async fn ssh_file_and_directory_tools_operate_over_existing_connection() -> anyh
                     "connection_id": connected.connection_id,
                     "path": sandbox.path.join("remote/nested/note.txt"),
                     "content": "alpha\nbeta\n",
-                    "create_parent": true
+                    "create_parents": true
                 })
                 .as_object()
                 .expect("ssh_write_file args object")
@@ -1480,6 +1504,7 @@ async fn ssh_read_file_enforces_max_bytes() -> anyhow::Result<()> {
             CallToolRequestParams::new("ssh_connect").with_arguments(
                 serde_json::json!({
                     "host_alias": "devbox",
+                    "auth_kind": "config_alias",
                     "user": "alice",
                     "description": "ssh read limit contract"
                 })

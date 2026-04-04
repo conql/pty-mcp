@@ -2,18 +2,17 @@ repos:
   - repo: local
     hooks:
       - id: cargo-fmt
-        name: cargo fmt --check
-        entry: cargo fmt --check
+        name: cargo fmt
+        entry: cargo fmt
+        language: system
+        pass_filenames: false
+      - id: cargo-clippy-fix
+        name: cargo clippy fix
+        entry: cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features -- -D warnings
         language: system
         pass_filenames: false
       - id: cargo-clippy
-        name: cargo clippy --all-targets --all-features -- -D warnings
+        name: cargo clippy
         entry: cargo clippy --all-targets --all-features -- -D warnings
         language: system
         pass_filenames: false
-      # - id: cargo-test
-      #   name: cargo test
-      #   entry: cargo test
-      #   language: system
-      #   pass_filenames: false
-      #   stages: [pre-push]

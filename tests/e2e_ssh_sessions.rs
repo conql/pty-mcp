@@ -66,6 +66,7 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
             "ssh_connect",
             json!({
                 "host_alias": "devbox",
+                "auth_kind": "config_alias",
                 "user": "alice",
                 "description": "ssh session e2e"
             }),
@@ -84,8 +85,8 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
                 "env": { "TERM": "xterm-256color" },
                 "interactive": false,
                 "description": "remote session e2e",
-                "wait_for_output_ms": 300,
-                "output_limit": 50,
+                "capture_wait_ms": 300,
+                "capture_limit": 50,
                 "output_view": "plain"
             }),
         )
@@ -94,12 +95,12 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
     ensure!(spawned.remote_cwd.as_deref() == Some(remote_home_cwd.as_str()));
     ensure!(spawned.target_summary.as_deref() == Some("alice@devbox"));
     ensure!(spawned.initial_output.is_some());
-    ensure!(spawned.initial_output.as_ref().is_some_and(|snapshot| {
-        snapshot
-            .lines
-            .iter()
-            .any(|line| line.text.contains(&expected_pwd))
-    }));
+    ensure!(
+        spawned
+            .initial_output
+            .as_ref()
+            .is_some_and(|snapshot| { snapshot.text.contains(&expected_pwd) })
+    );
 
     harness
         .wait_until("ssh session exit", || async {
@@ -125,8 +126,8 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
             }),
         )
         .await?;
-    ensure!(spawned_output.lines.contains(&expected_pwd));
-    ensure!(spawned_output.lines.contains("TERM=xterm-256color"));
+    ensure!(spawned_output.page.text.contains(&expected_pwd));
+    ensure!(spawned_output.page.text.contains("TERM=xterm-256color"));
 
     let listed = harness
         .call_tool_typed::<PtyListResponse>("pty_list", json!({}))
@@ -186,8 +187,8 @@ async fn ssh_session_spawn_and_exec_flow_through_real_binary() -> Result<()> {
             }),
         )
         .await?;
-    ensure!(output.lines.contains(&expected_pwd));
-    ensure!(output.lines.contains("exec-shell=bash"));
+    ensure!(output.page.text.contains(&expected_pwd));
+    ensure!(output.page.text.contains("exec-shell=bash"));
 
     let listed = harness
         .call_tool_typed::<PtyListResponse>("pty_list", json!({}))

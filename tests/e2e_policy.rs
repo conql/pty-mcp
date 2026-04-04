@@ -121,11 +121,11 @@ async fn spawn_policy_from_env_is_enforced_through_real_binary() -> Result<()> {
                 json!({
                     "session_id": spawned.session_id,
                     "signal": "sigterm",
-                    "cleanup": true
+                    "cleanup_session": true
                 }),
             )
             .await?;
-        ensure!(killed.cleanup);
+        ensure!(killed.cleanup_session);
 
         Ok(())
     }
@@ -152,8 +152,8 @@ async fn denied_commands_from_env_are_enforced_through_real_binary() -> Result<(
                 "args": ["-lc", "printf 'deny-command-safe\\n'"],
                 "cwd": harness.workspace_root(),
                 "description": "deny commands allows non-denied command",
-                "wait_for_output_ms": 300,
-                "output_limit": 20
+                "capture_wait_ms": 300,
+                "capture_limit": 20
             }),
         )
         .await?;
@@ -187,11 +187,11 @@ async fn denied_commands_from_env_are_enforced_through_real_binary() -> Result<(
             json!({
                 "session_id": allowed.session_id,
                 "signal": "sigterm",
-                "cleanup": true
+                    "cleanup_session": true
             }),
         )
         .await?;
-    ensure!(killed.cleanup);
+    ensure!(killed.cleanup_session);
 
     harness.shutdown().await
 }
@@ -215,8 +215,8 @@ async fn denied_env_vars_from_env_are_enforced_through_real_binary() -> Result<(
                     "SAFE_MODE": "enabled"
                 },
                 "description": "deny env allows non-denied key",
-                "wait_for_output_ms": 300,
-                "output_limit": 20
+                "capture_wait_ms": 300,
+                "capture_limit": 20
             }),
         )
         .await?;
@@ -262,11 +262,11 @@ async fn denied_env_vars_from_env_are_enforced_through_real_binary() -> Result<(
             json!({
                 "session_id": allowed.session_id,
                 "signal": "sigterm",
-                "cleanup": true
+                    "cleanup_session": true
             }),
         )
         .await?;
-    ensure!(killed.cleanup);
+    ensure!(killed.cleanup_session);
 
     harness.shutdown().await
 }
@@ -286,8 +286,8 @@ async fn session_limit_from_env_is_enforced_at_tool_boundary() -> Result<()> {
                 "args": ["-lc", "printf 'slot-1\\n'; trap 'exit 0' TERM INT; while :; do sleep 1; done"],
                 "cwd": harness.workspace_root(),
                 "description": "first session under limit",
-                "wait_for_output_ms": 300,
-                "output_limit": 20
+                "capture_wait_ms": 300,
+                "capture_limit": 20
             }),
         )
         .await?;
@@ -303,7 +303,7 @@ async fn session_limit_from_env_is_enforced_at_tool_boundary() -> Result<()> {
                     }),
                 )
                 .await?;
-            Ok(read.lines.contains("slot-1"))
+            Ok(read.page.text.contains("slot-1"))
         })
         .await?;
 
@@ -337,11 +337,11 @@ async fn session_limit_from_env_is_enforced_at_tool_boundary() -> Result<()> {
             json!({
                 "session_id": first.session_id,
                 "signal": "sigterm",
-                "cleanup": true
+                    "cleanup_session": true
             }),
         )
         .await?;
-    ensure!(killed.cleanup);
+    ensure!(killed.cleanup_session);
 
     harness.shutdown().await
 }
@@ -364,14 +364,10 @@ async fn ensure_spawn_output_contains(
     needle: &str,
     error_context: &str,
 ) -> Result<()> {
-    let initial_output = spawned.initial_output.as_ref().map(|snapshot| {
-        snapshot
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    });
+    let initial_output = spawned
+        .initial_output
+        .as_ref()
+        .map(|snapshot| snapshot.text.clone());
     if initial_output
         .as_deref()
         .unwrap_or_default()
@@ -394,7 +390,7 @@ async fn ensure_spawn_output_contains(
                         }),
                     )
                     .await?;
-                Ok(read.lines.contains(needle))
+                Ok(read.page.text.contains(needle))
             }
         })
         .await

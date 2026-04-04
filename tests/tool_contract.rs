@@ -57,11 +57,15 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
         .find(|tool| tool.name == "pty_read")
         .expect("pty_read tool")
         .input_schema;
-    let read_view = &read_schema["properties"]["view"];
+    let read_view = &read_schema["properties"]["output_view"];
     assert_eq!(read_view["type"], serde_json::json!(["string", "null"]));
     assert_eq!(
         read_view["enum"],
         serde_json::json!(["plain", "ansi", "raw", null])
+    );
+    assert_eq!(
+        read_schema["properties"]["line_number_mode"]["enum"],
+        serde_json::json!(["none", "embedded", null])
     );
     assert!(read_schema.get("$defs").is_none());
 
@@ -106,6 +110,10 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
         output_view["enum"],
         serde_json::json!(["plain", "ansi", "raw", null])
     );
+    assert_eq!(
+        spawn_schema["properties"]["line_number_mode"]["enum"],
+        serde_json::json!(["none", "embedded", null])
+    );
 
     let connect_schema = server
         .tool_definitions()
@@ -115,7 +123,7 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
         .input_schema;
     assert_eq!(
         connect_schema["properties"]["auth_kind"]["enum"],
-        serde_json::json!(["ssh_agent", "identity_file", "config_alias", null])
+        serde_json::json!(["ssh_agent", "identity_file", "config_alias"])
     );
     assert_eq!(
         connect_schema["anyOf"],
@@ -149,6 +157,7 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    assert!(connect_required.contains(&serde_json::json!("auth_kind")));
     assert!(!connect_required.contains(&serde_json::json!("description")));
 
     Ok(())
@@ -171,7 +180,7 @@ async fn tools_list_over_protocol_preserves_read_view_enum_schema() -> anyhow::R
         .find(|tool| tool.name == "pty_read")
         .expect("pty_read tool")
         .input_schema;
-    let read_view = &read_schema["properties"]["view"];
+    let read_view = &read_schema["properties"]["output_view"];
 
     assert_eq!(read_view["type"], serde_json::json!(["string", "null"]));
     assert_eq!(
@@ -272,9 +281,7 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
     assert!(spawned.pid.is_some());
 
     let ready = wait_for_read_match(&client, &spawned.session_id, "ready").await?;
-    assert!(ready.lines.contains("ready"));
-    assert!(ready.first_line_number.is_some());
-    assert!(ready.line_numbers.is_none());
+    assert!(ready.page.text.contains("ready"));
 
     let write_result = client
         .call_tool(
@@ -296,8 +303,7 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
 
     let echoed =
         wait_for_read_match(&client, &write_payload.session_id, "echo:hello from tool").await?;
-    assert!(echoed.lines.contains("echo:hello from tool"));
-    assert!(echoed.first_line_number.is_some());
+    assert!(echoed.page.text.contains("echo:hello from tool"));
 
     let list_result = client
         .call_tool(CallToolRequestParams::new("pty_list"))
@@ -316,7 +322,7 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
                 serde_json::json!({
                     "session_id": write_payload.session_id,
                     "signal": "sigterm",
-                    "cleanup": true
+                    "cleanup_session": true
                 })
                 .as_object()
                 .expect("kill args object")
@@ -325,7 +331,7 @@ async fn pty_spawn_write_read_and_kill_follow_the_main_workflow() -> anyhow::Res
         )
         .await?;
     let kill_payload = kill_result.into_typed::<PtyKillResponse>()?;
-    assert!(kill_payload.cleanup);
+    assert!(kill_payload.cleanup_session);
 
     let list_after_kill = client
         .call_tool(CallToolRequestParams::new("pty_list"))
@@ -454,7 +460,7 @@ async fn pty_read_rejects_unknown_view_variant() -> anyhow::Result<()> {
                 serde_json::json!({
                     "session_id": spawned.session_id,
                     "limit": 50,
-                    "view": "merged"
+                    "output_view": "merged"
                 })
                 .as_object()
                 .expect("read args object")
@@ -464,6 +470,121 @@ async fn pty_read_rejects_unknown_view_variant() -> anyhow::Result<()> {
         .await
         .expect_err("unknown view variant should fail parameter deserialization");
     assert!(read_error.to_string().contains("unknown variant `merged`"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn pty_read_rejects_raw_with_embedded_line_numbers() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server = PtyMcpServer::new(Arc::new(AppState::new(Config::default())));
+
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let spawned = client
+        .call_tool(
+            CallToolRequestParams::new("pty_spawn").with_arguments(
+                serde_json::json!({
+                    "command": "sh",
+                    "args": ["-c", "printf 'alpha\\n'; sleep 1"],
+                    "description": "raw embedded validation"
+                })
+                .as_object()
+                .expect("spawn args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<PtySpawnResponse>()?;
+
+    let read = client
+        .call_tool(
+            CallToolRequestParams::new("pty_read").with_arguments(
+                serde_json::json!({
+                    "session_id": spawned.session_id,
+                    "limit": 20,
+                    "output_view": "raw",
+                    "line_number_mode": "embedded"
+                })
+                .as_object()
+                .expect("read args object")
+                .clone(),
+            ),
+        )
+        .await
+        .expect_err("raw + embedded should fail parameter validation");
+    assert!(read.to_string().contains("line_number_mode=embedded"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn pty_spawn_requires_capture_limit_for_capture_options() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server = PtyMcpServer::new(Arc::new(AppState::new(Config::default())));
+
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let error = client
+        .call_tool(
+            CallToolRequestParams::new("pty_spawn").with_arguments(
+                serde_json::json!({
+                    "command": "sh",
+                    "args": ["-c", "printf 'alpha\\n'"],
+                    "output_view": "plain"
+                })
+                .as_object()
+                .expect("spawn args object")
+                .clone(),
+            ),
+        )
+        .await
+        .expect_err("capture options without capture_limit should fail parameter validation");
+    assert!(error.to_string().contains("capture_limit is required"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ssh_connect_requires_explicit_auth_kind() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server = PtyMcpServer::new(Arc::new(AppState::new(Config::default())));
+
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let error = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_connect").with_arguments(
+                serde_json::json!({
+                    "host_alias": "devbox",
+                    "user": "alice"
+                })
+                .as_object()
+                .expect("connect args object")
+                .clone(),
+            ),
+        )
+        .await
+        .expect_err("missing auth_kind should fail parameter validation");
+    assert!(error.to_string().contains("missing field `auth_kind`"));
 
     client.cancel().await?;
     server_handle.await??;
@@ -560,8 +681,8 @@ async fn pty_spawn_can_return_initial_output_snapshot() -> anyhow::Result<()> {
                     "command": "sh",
                     "args": ["-c", "printf 'Password:'; sleep 5"],
                     "description": "password prompt smoke test",
-                    "wait_for_output_ms": 500,
-                    "output_limit": 5
+                    "capture_wait_ms": 500,
+                    "capture_limit": 5
                 })
                 .as_object()
                 .expect("spawn args object")
@@ -576,12 +697,7 @@ async fn pty_spawn_can_return_initial_output_snapshot() -> anyhow::Result<()> {
         .as_ref()
         .expect("spawn should include initial output snapshot");
     assert!(initial_output.returned > 0);
-    assert!(
-        initial_output
-            .lines
-            .iter()
-            .any(|line| line.text.contains("Password:"))
-    );
+    assert!(initial_output.text.contains("Password:"));
 
     let _ = client
         .call_tool(
@@ -589,7 +705,7 @@ async fn pty_spawn_can_return_initial_output_snapshot() -> anyhow::Result<()> {
                 serde_json::json!({
                     "session_id": spawned.session_id,
                     "signal": "sigterm",
-                    "cleanup": true
+                    "cleanup_session": true
                 })
                 .as_object()
                 .expect("kill args object")
@@ -716,7 +832,7 @@ async fn wait_for_read_match(
             )
             .await?;
         let payload = result.into_typed::<PtyReadResponse>()?;
-        if payload.lines.contains(needle) {
+        if payload.page.text.contains(needle) {
             return Ok(payload);
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
