@@ -218,7 +218,7 @@ async fn ssh_mount_failure_is_visible_via_ssh_list_and_mount_resource() -> Resul
     let failing_sshfs = sandbox.path("sshfs-fail");
     write_fake_executable(
         &failing_sshfs,
-        "#!/bin/sh\necho 'fuse: mount failed for failing-mount' 1>&2\nexit 1\n",
+        "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ] || [ \"${1:-}\" = \"-V\" ]; then echo 'SSHFS 3.7.3 (macFUSE 4.6.0)'; exit 0; fi\necho 'fuse: mount failed for failing-mount' 1>&2\nexit 1\n",
     )?;
 
     let harness = E2eHarness::builder("e2e_ssh_mount_failure")
@@ -299,7 +299,7 @@ async fn shutdown_automatically_unmounts_managed_mounts() -> Result<()> {
 
     write_fake_executable(
         &sshfs_path,
-        "#!/bin/sh\nset -eu\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p -- \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"--version\" ] || [ \"${1:-}\" = \"-V\" ]; then echo 'SSHFS 3.7.3 (macFUSE 4.6.0)'; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p -- \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
     )?;
     write_fake_executable(
         &umount_path,

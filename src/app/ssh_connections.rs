@@ -502,10 +502,12 @@ fn is_active_mount_status(status: &crate::ssh::SshMountStatus) -> bool {
 mod tests {
     use std::path::PathBuf;
 
+    #[cfg(target_os = "macos")]
+    use crate::ssh::MacFuseCapability;
     use crate::{
         Config,
         session::SessionSummary,
-        ssh::{MacFuseCapability, SshBinaryCapability, SshCapabilityView, SshTarget},
+        ssh::{SshBinaryCapability, SshCapabilityView, SshTarget},
     };
 
     use super::*;
