@@ -91,6 +91,18 @@ async fn ssh_mount_and_force_disconnect_cleanup_active_resources() -> Result<()>
         "/srv/project",
         "sshfs log",
     )?;
+    if cfg!(target_os = "macos") {
+        assert_text_contains(
+            &harness.fake_bins().read_sshfs_log(),
+            "noappledouble",
+            "sshfs log",
+        )?;
+        assert_text_contains(
+            &harness.fake_bins().read_sshfs_log(),
+            "noapplexattr",
+            "sshfs log",
+        )?;
+    }
     assert_text_contains(
         &harness.fake_bins().read_umount_log(),
         &mounted.local_path,

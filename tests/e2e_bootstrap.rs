@@ -93,6 +93,11 @@ async fn invalid_env_configuration_fails_at_startup_with_diagnostics() -> Result
             "invalid bool for PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS",
         ),
         (
+            "invalid ssh macos metadata bool",
+            vec![("PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA", "maybe")],
+            "invalid bool for PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA",
+        ),
+        (
             "invalid ssh auth kind",
             vec![("PTY_MCP_SSH_ALLOWED_AUTH_KINDS", "magic")],
             "invalid ssh auth kind for PTY_MCP_SSH_ALLOWED_AUTH_KINDS",

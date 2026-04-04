@@ -70,6 +70,7 @@ pub struct SshMountPlanRequest {
     pub auth_kind: SshAuthKind,
     pub identity_path: Option<PathBuf>,
     pub verify_host_key: bool,
+    pub macos_block_apple_metadata: bool,
     pub sshfs_bin_path: Option<PathBuf>,
 }
 
@@ -645,21 +646,11 @@ fn build_verify_args(
 fn build_mount_args(request: &SshMountPlanRequest) -> Vec<String> {
     let mut args = Vec::new();
 
-    if request.mount.read_only {
-        args.push("-o".to_string());
-        args.push("ro".to_string());
-    }
-
-    args.push("-o".to_string());
-    args.push(if request.verify_host_key {
-        "StrictHostKeyChecking=yes".to_string()
-    } else {
-        "StrictHostKeyChecking=no".to_string()
-    });
-    if !request.verify_host_key {
-        args.push("-o".to_string());
-        args.push("UserKnownHostsFile=/dev/null".to_string());
-    }
+    args.extend(build_mount_general_args(request));
+    args.extend(build_mount_platform_args(
+        cfg!(target_os = "macos"),
+        request.macos_block_apple_metadata,
+    ));
 
     if let Some(port) = request.connection.target.port {
         args.push("-p".to_string());
@@ -686,6 +677,44 @@ fn build_mount_args(request: &SshMountPlanRequest) -> Vec<String> {
     args.push(request.mount.local_path.clone());
 
     args
+}
+
+fn build_mount_general_args(request: &SshMountPlanRequest) -> Vec<String> {
+    let mut args = Vec::new();
+
+    if request.mount.read_only {
+        push_mount_option(&mut args, "ro");
+    }
+
+    push_mount_option(
+        &mut args,
+        if request.verify_host_key {
+            "StrictHostKeyChecking=yes"
+        } else {
+            "StrictHostKeyChecking=no"
+        },
+    );
+    if !request.verify_host_key {
+        push_mount_option(&mut args, "UserKnownHostsFile=/dev/null");
+    }
+
+    args
+}
+
+fn build_mount_platform_args(is_macos: bool, macos_block_apple_metadata: bool) -> Vec<String> {
+    let mut args = Vec::new();
+
+    if is_macos && macos_block_apple_metadata {
+        push_mount_option(&mut args, "noappledouble");
+        push_mount_option(&mut args, "noapplexattr");
+    }
+
+    args
+}
+
+fn push_mount_option(args: &mut Vec<String>, option: &str) {
+    args.push("-o".to_string());
+    args.push(option.to_string());
 }
 
 fn destination(target: &SshTarget) -> String {
@@ -901,4 +930,102 @@ fn timeout_error(message: &str, output: &Output) -> anyhow::Error {
         output.status.code(),
         stderr_preview(&combined)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use crate::ssh::{
+        SshAuthKind, SshConnectionId, SshConnectionStatus, SshConnectionSummary, SshMountBackend,
+        SshMountId, SshMountStatus, SshMountSummary, SshTarget,
+    };
+
+    use super::{SshMountPlanRequest, build_mount_args, build_mount_platform_args};
+
+    fn mount_request(macos_block_apple_metadata: bool) -> SshMountPlanRequest {
+        let target = SshTarget {
+            host_alias: Some("devbox".to_string()),
+            host: "devbox.example.com".to_string(),
+            user: Some("alice".to_string()),
+            port: Some(2222),
+        };
+
+        SshMountPlanRequest {
+            mount: SshMountSummary {
+                mount_id: SshMountId::new(),
+                title: None,
+                description: None,
+                connection_id: SshConnectionId::new(),
+                status: SshMountStatus::Mounting,
+                backend: SshMountBackend::Sshfs,
+                local_path: "/tmp/mount".to_string(),
+                remote_path: "/srv/project".to_string(),
+                read_only: false,
+                mounted_at: Utc::now(),
+                last_error: None,
+            },
+            connection: SshConnectionSummary {
+                connection_id: SshConnectionId::new(),
+                title: None,
+                description: None,
+                status: SshConnectionStatus::Ready,
+                target: target.clone(),
+                target_summary: target.summary(),
+                auth_kind: Some(SshAuthKind::ConfigAlias),
+                started_at: Utc::now(),
+                last_used_at: None,
+                active_session_count: 0,
+                active_mount_count: 0,
+                metadata: Default::default(),
+            },
+            auth_kind: SshAuthKind::ConfigAlias,
+            identity_path: None,
+            verify_host_key: true,
+            macos_block_apple_metadata,
+            sshfs_bin_path: None,
+        }
+    }
+
+    #[test]
+    fn macos_mount_platform_args_include_metadata_blockers_by_default() {
+        let args = build_mount_platform_args(true, true);
+
+        assert_eq!(
+            args,
+            vec![
+                "-o".to_string(),
+                "noappledouble".to_string(),
+                "-o".to_string(),
+                "noapplexattr".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn non_macos_mount_platform_args_skip_metadata_blockers() {
+        let args = build_mount_platform_args(false, true);
+
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn disabled_macos_metadata_blocking_skips_extra_mount_options() {
+        let args = build_mount_platform_args(true, false);
+
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn build_mount_args_preserves_standard_sshfs_options() {
+        let request = mount_request(true);
+
+        let args = build_mount_args(&request);
+
+        assert!(args.contains(&"-p".to_string()));
+        assert!(args.contains(&"2222".to_string()));
+        assert!(args.contains(&"StrictHostKeyChecking=yes".to_string()));
+        assert!(args.contains(&"alice@devbox:/srv/project".to_string()));
+        assert!(args.contains(&"/tmp/mount".to_string()));
+    }
 }

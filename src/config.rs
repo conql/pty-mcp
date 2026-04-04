@@ -16,6 +16,7 @@ pub struct SshConfig {
     pub sshfs_bin_path: Option<PathBuf>,
     pub umount_bin_path: Option<PathBuf>,
     pub diskutil_bin_path: Option<PathBuf>,
+    pub macos_block_apple_metadata: bool,
     pub managed_mount_root: Option<PathBuf>,
     pub allowed_hosts: Vec<String>,
     pub denied_hosts: Vec<String>,
@@ -34,6 +35,7 @@ impl Default for SshConfig {
             sshfs_bin_path: resolve_bin_path(None, "sshfs", sshfs_default_paths()),
             umount_bin_path: resolve_bin_path(None, "umount", umount_default_paths()),
             diskutil_bin_path: resolve_bin_path(None, "diskutil", diskutil_default_paths()),
+            macos_block_apple_metadata: default_macos_block_apple_metadata(),
             managed_mount_root: None,
             allowed_hosts: Vec::new(),
             denied_hosts: Vec::new(),
@@ -179,6 +181,11 @@ impl Config {
             );
         }
 
+        if let Ok(value) = env::var("PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA") {
+            config.ssh.macos_block_apple_metadata =
+                parse_bool("PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA", &value)?;
+        }
+
         if let Ok(value) = env::var("PTY_MCP_SSH_MANAGED_MOUNT_ROOT") {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
@@ -303,6 +310,16 @@ fn parse_bool(key: &'static str, value: &str) -> Result<bool> {
     }
 }
 
+#[cfg(target_os = "macos")]
+const fn default_macos_block_apple_metadata() -> bool {
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+const fn default_macos_block_apple_metadata() -> bool {
+    false
+}
+
 fn resolve_bin_path(
     explicit: Option<PathBuf>,
     command_name: &str,
@@ -386,7 +403,41 @@ fn diskutil_default_paths() -> &'static [&'static str] {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_auth_kinds, parse_bool, parse_usize};
+    use std::sync::{Mutex, OnceLock};
+
+    use super::{
+        Config, default_macos_block_apple_metadata, parse_auth_kinds, parse_bool, parse_usize,
+    };
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let original = std::env::var(key).ok();
+            match value {
+                Some(value) => unsafe { std::env::set_var(key, value) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.original.as_deref() {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
 
     #[test]
     fn parse_usize_error_contains_key_and_value() {
@@ -412,5 +463,28 @@ mod tests {
         let text = format!("{error:#}");
         assert!(text.contains("PTY_MCP_SSH_ALLOWED_AUTH_KINDS"));
         assert!(text.contains("magic"));
+    }
+
+    #[test]
+    fn config_from_env_uses_platform_default_for_macos_metadata_blocking() {
+        let _lock = env_lock().lock().expect("env lock poisoned");
+        let _guard = EnvGuard::set("PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA", None);
+
+        let config = Config::from_env().expect("config should load");
+
+        assert_eq!(
+            config.ssh.macos_block_apple_metadata,
+            default_macos_block_apple_metadata()
+        );
+    }
+
+    #[test]
+    fn config_from_env_allows_overriding_macos_metadata_blocking() {
+        let _lock = env_lock().lock().expect("env lock poisoned");
+        let _guard = EnvGuard::set("PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA", Some("false"));
+
+        let config = Config::from_env().expect("config should load");
+
+        assert!(!config.ssh.macos_block_apple_metadata);
     }
 }
