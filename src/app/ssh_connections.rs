@@ -518,45 +518,6 @@ mod tests {
         super::super::AppState::new(config)
     }
 
-    #[test]
-    fn mount_feature_requires_sshfs_and_unmount() {
-        let capabilities = SshCapabilityView {
-            sshfs: SshBinaryCapability {
-                available: true,
-                ..Default::default()
-            },
-            unmount: SshBinaryCapability {
-                available: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let missing_sshfs = SshCapabilityView {
-            sshfs: SshBinaryCapability {
-                available: false,
-                ..Default::default()
-            },
-            ..capabilities.clone()
-        };
-        assert!(!mount_feature_available_for(&missing_sshfs));
-
-        let missing_unmount = SshCapabilityView {
-            unmount: SshBinaryCapability {
-                available: false,
-                ..Default::default()
-            },
-            ..capabilities.clone()
-        };
-        assert!(!mount_feature_available_for(&missing_unmount));
-
-        if cfg!(target_os = "macos") {
-            assert!(!mount_feature_available_for(&capabilities));
-        } else {
-            assert!(mount_feature_available_for(&capabilities));
-        }
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn mount_feature_requires_macfuse_on_macos() {

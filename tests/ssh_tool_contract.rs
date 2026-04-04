@@ -1203,7 +1203,7 @@ async fn ssh_disconnect_force_cleans_up_session_and_mounts() -> anyhow::Result<(
     )?;
     write_fake_executable(
         &sshfs_path,
-        "#!/bin/sh\nset -eu\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"--version\" ] || [ \"${1:-}\" = \"-V\" ]; then echo 'SSHFS 3.7.3 (macFUSE 4.6.0)'; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"\n",
     )?;
     write_fake_executable(
         &umount_path,
