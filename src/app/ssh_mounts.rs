@@ -77,6 +77,7 @@ impl SshService {
                 auth_kind: connection_context.auth_kind,
                 identity_path: connection_context.identity_path.clone(),
                 verify_host_key: connection_context.verify_host_key,
+                macos_block_apple_metadata: self.context.ssh_config.macos_block_apple_metadata,
                 sshfs_bin_path: self.context.ssh_config.resolved_sshfs_bin_path(),
             })
             .await;

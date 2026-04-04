@@ -170,6 +170,10 @@ In practice:
 
 Without local FUSE support and `sshfs`, SSH connections and remote command execution can still work, but `ssh_mount` will not.
 
+On macOS, `ssh_mount` also adds `sshfs` mount options that suppress AppleDouble files (`._*`) and Apple extended attributes by default. This helps avoid writing those forms of Apple metadata back into the remote tree in the common case, but does not prevent Finder from creating `.DS_Store` files.
+
+If Finder or `cp` reports metadata or permission errors while copying into a mounted path, disable that metadata-blocking mount behavior with `PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA=false`.
+
 Agents can read the built-in mount setup resources and **walk the user through the correct FUSE/`sshfs` installation steps** for the current platform.
 
 ## MCP Resources
@@ -249,6 +253,7 @@ By default, the following env vars are denied:
 - `PTY_MCP_SSH_ALLOWED_AUTH_KINDS`: comma-separated auth allowlist, values: `host_alias`, `ssh_agent`, `identity_path`
 - `PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS`: whether arbitrary local mount paths are allowed, default `true`
 - `PTY_MCP_SSH_ALLOWED_MOUNT_ROOTS`: colon-separated allowed local mount roots
+- `PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA`: on macOS, whether `ssh_mount` adds `noappledouble` and `noapplexattr`, default `true` on macOS and `false` elsewhere
 - `PTY_MCP_SSH_PORT_MIN`: minimum allowed SSH port, default `1`
 - `PTY_MCP_SSH_PORT_MAX`: maximum allowed SSH port, default `65535`
 
