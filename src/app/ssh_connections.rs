@@ -503,12 +503,8 @@ mod tests {
     use std::path::PathBuf;
 
     #[cfg(target_os = "macos")]
-    use crate::ssh::MacFuseCapability;
-    use crate::{
-        Config,
-        session::SessionSummary,
-        ssh::{SshBinaryCapability, SshCapabilityView, SshTarget},
-    };
+    use crate::ssh::{MacFuseCapability, SshBinaryCapability, SshCapabilityView};
+    use crate::{Config, session::SessionSummary, ssh::SshTarget};
 
     use super::*;
 
