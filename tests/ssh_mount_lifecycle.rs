@@ -64,6 +64,15 @@ fn fake_sshfs_script(body: &str) -> String {
 }
 
 #[cfg(unix)]
+fn fake_ssh_home_script(remote_home: &str, log_path: &Path) -> String {
+    format!(
+        "#!/bin/sh\nset -eu\nlog={log}\nprintf 'ssh %s\\n' \"$*\" >> {log}\nif [ \"${{1:-}}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nHOME={remote_home} exec /bin/sh -lc \"$last\"\n",
+        log = shell_quote(log_path),
+        remote_home = shell_quote_str(remote_home),
+    )
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dirs()
 -> anyhow::Result<()> {
@@ -174,6 +183,112 @@ async fn ssh_mount_uses_explicit_local_path_and_cleanup_only_removes_managed_dir
     let log = fs::read_to_string(log_path)?;
     assert!(log.contains("/srv/project"));
     assert!(log.contains("explicit-mount"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_mount_resolves_home_relative_remote_paths_before_mounting() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("home_relative")?;
+    let managed_root = sandbox.path.join("managed");
+    fs::create_dir_all(&managed_root)?;
+
+    let ssh_path = sandbox.path.join("ssh");
+    let sshfs_path = sandbox.path.join("sshfs");
+    let ssh_log_path = sandbox.path.join("ssh.log");
+    let sshfs_log_path = sandbox.path.join("sshfs.log");
+    let remote_home = "/home/alice";
+    write_fake_executable(&ssh_path, &fake_ssh_home_script(remote_home, &ssh_log_path))?;
+    write_fake_executable(
+        &sshfs_path,
+        &fake_sshfs_script(&format!(
+            "printf 'sshfs %s\\n' \"$*\" >> {log}\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nmkdir -p \"$last\"\ntouch \"$last/.sshfs-mounted\"",
+            log = shell_quote(sshfs_log_path.as_path()),
+        )),
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    config.ssh.sshfs_bin_path = Some(sshfs_path);
+    config.ssh.managed_mount_root = Some(managed_root.clone());
+    let app = AppState::new(config);
+    let connection = ready_connection(&app);
+    let local_path = managed_root.join("home-relative-mount");
+
+    let mount = app
+        .ssh()
+        .mount(SshMountRequest {
+            connection_id: connection.connection_id,
+            remote_path: "~/workspace/sdc-skill".to_string(),
+            local_path: local_path.display().to_string(),
+            read_only: false,
+            backend: None,
+            create_local_path: true,
+            title: Some("HomeRelative".to_string()),
+            description: Some("home-relative mount".to_string()),
+        })
+        .await?;
+
+    assert_eq!(mount.remote_path, "/home/alice/workspace/sdc-skill");
+    assert!(local_path.join(".sshfs-mounted").exists());
+
+    let ssh_log = fs::read_to_string(ssh_log_path)?;
+    assert!(!ssh_log.trim().is_empty());
+
+    let sshfs_log = fs::read_to_string(sshfs_log_path)?;
+    assert!(sshfs_log.contains("/home/alice/workspace/sdc-skill"));
+    assert!(!sshfs_log.contains(":~/workspace/sdc-skill"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_mount_rejects_relative_remote_paths_before_invoking_sshfs() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("relative_remote_path")?;
+    let managed_root = sandbox.path.join("managed");
+    fs::create_dir_all(&managed_root)?;
+
+    let sshfs_path = sandbox.path.join("sshfs");
+    let sshfs_log_path = sandbox.path.join("sshfs.log");
+    write_fake_executable(
+        &sshfs_path,
+        &fake_sshfs_script(&format!(
+            "printf 'sshfs %s\\n' \"$*\" >> {log}\nexit 0",
+            log = shell_quote(sshfs_log_path.as_path()),
+        )),
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.sshfs_bin_path = Some(sshfs_path);
+    config.ssh.managed_mount_root = Some(managed_root.clone());
+    let app = AppState::new(config);
+    let connection = ready_connection(&app);
+
+    let error = app
+        .ssh()
+        .mount(SshMountRequest {
+            connection_id: connection.connection_id,
+            remote_path: "relative/path".to_string(),
+            local_path: managed_root
+                .join("invalid-remote-path")
+                .display()
+                .to_string(),
+            read_only: false,
+            backend: None,
+            create_local_path: true,
+            title: None,
+            description: Some("relative remote path".to_string()),
+        })
+        .await
+        .expect_err("relative remote path should fail");
+
+    let text = format!("{error:#}");
+    assert!(text.contains("absolute path or home-relative path"));
+    assert!(
+        fs::read_to_string(sshfs_log_path)
+            .unwrap_or_default()
+            .is_empty()
+    );
     Ok(())
 }
 
@@ -339,4 +454,9 @@ fn write_fake_executable(path: &Path, body: &str) -> anyhow::Result<()> {
 fn shell_quote(path: &Path) -> String {
     let raw = path.display().to_string();
     format!("'{}'", raw.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(unix)]
+fn shell_quote_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
