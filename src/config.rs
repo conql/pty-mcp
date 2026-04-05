@@ -283,9 +283,9 @@ fn parse_auth_kinds(key: &'static str, value: &str) -> Result<Vec<String>> {
 
 fn normalize_auth_kind(value: &str) -> Option<String> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "host_alias" | "config_alias" => Some("host_alias".to_string()),
-        "ssh_agent" | "agent" => Some("ssh_agent".to_string()),
-        "identity_path" | "identity_file" => Some("identity_path".to_string()),
+        "config_alias" => Some("config_alias".to_string()),
+        "ssh_agent" => Some("ssh_agent".to_string()),
+        "identity_file" => Some("identity_file".to_string()),
         _ => None,
     }
 }

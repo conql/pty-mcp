@@ -284,7 +284,7 @@ By default, the following env vars are denied:
 - `PTY_MCP_SSH_ALLOWED_HOSTS`: comma-separated host allowlist, supports `*` and `*.example.com`
 - `PTY_MCP_SSH_DENIED_HOSTS`: comma-separated host denylist
 - `PTY_MCP_SSH_ALLOWED_USERS`: comma-separated SSH user allowlist
-- `PTY_MCP_SSH_ALLOWED_AUTH_KINDS`: comma-separated auth allowlist, values: `host_alias`, `ssh_agent`, `identity_path`
+- `PTY_MCP_SSH_ALLOWED_AUTH_KINDS`: comma-separated auth allowlist, values: `config_alias`, `ssh_agent`, `identity_file`
 - `PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS`: whether arbitrary local mount paths are allowed, default `true`
 - `PTY_MCP_SSH_ALLOWED_MOUNT_ROOTS`: colon-separated allowed local mount roots
 - `PTY_MCP_SSH_MACOS_BLOCK_APPLE_METADATA`: on macOS, whether `ssh_mount` adds `noappledouble` and `noapplexattr`, default `true` on macOS and `false` elsewhere

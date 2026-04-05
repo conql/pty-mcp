@@ -109,7 +109,7 @@ fn auth_policy_rejects_disallowed_identity_files() {
 
     let text = format!("{error:#}");
     assert!(text.contains("auth kind"));
-    assert!(text.contains("identity_path"));
+    assert!(text.contains("identity_file"));
 }
 
 #[test]

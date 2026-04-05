@@ -117,9 +117,9 @@ impl SshPolicy {
         identity_path: Option<&Path>,
     ) -> Result<()> {
         let normalized_auth_kind = normalize_value(match auth_kind {
-            SshAuthKind::ConfigAlias => "host_alias",
+            SshAuthKind::ConfigAlias => "config_alias",
             SshAuthKind::SshAgent => "ssh_agent",
-            SshAuthKind::IdentityFile => "identity_path",
+            SshAuthKind::IdentityFile => "identity_file",
         })
         .expect("auth kind");
         if !self.allowed_auth_kinds.is_empty()

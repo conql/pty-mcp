@@ -125,7 +125,7 @@ async fn ssh_connect_enforces_host_user_port_and_auth_policy_through_real_binary
         },
         Case {
             name: "auth_kind_blocked",
-            envs: &[("PTY_MCP_SSH_ALLOWED_AUTH_KINDS", "host_alias")],
+            envs: &[("PTY_MCP_SSH_ALLOWED_AUTH_KINDS", "config_alias")],
             args: json!({
                 "host": "devbox.example.com",
                 "user": "alice",
