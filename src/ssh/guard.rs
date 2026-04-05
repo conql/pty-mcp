@@ -162,9 +162,9 @@ impl SshGuard {
         }
 
         let key = match auth_kind {
-            SshAuthKind::ConfigAlias => "host_alias",
+            SshAuthKind::ConfigAlias => "config_alias",
             SshAuthKind::SshAgent => "ssh_agent",
-            SshAuthKind::IdentityFile => "identity_path",
+            SshAuthKind::IdentityFile => "identity_file",
         };
 
         ensure!(
