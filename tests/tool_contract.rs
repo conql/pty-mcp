@@ -193,6 +193,17 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn server_instructions_render_ssh_lists_without_stray_commas() {
+    let server = PtyMcpServer::new(Arc::new(AppState::new(Config::default())));
+    let instructions = server.get_info().instructions.unwrap_or_default();
+
+    assert!(instructions.contains("ssh_tunnel_open, ssh_tunnel_close, ssh_mount, ssh_unmount"));
+    assert!(instructions.contains("ssh_unmount, ssh_list, and ssh_disconnect"));
+    assert!(instructions.contains("ssh://connections, ssh://tunnels, and ssh://mounts"));
+    assert!(!instructions.contains(",,"));
+}
+
 #[tokio::test]
 async fn tools_list_over_protocol_preserves_read_view_enum_schema() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);

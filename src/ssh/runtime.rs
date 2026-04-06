@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    net::TcpListener,
     path::PathBuf,
     process::{Output, Stdio},
     sync::{
@@ -445,15 +444,15 @@ impl SshRuntime {
     }
 }
 
-pub fn reserve_local_port(bind_host: &str) -> Result<(u16, TcpListener)> {
-    let listener = TcpListener::bind((bind_host, 0)).map_err(|source| {
-        anyhow!("failed to reserve local tunnel port on {bind_host}: {source}")
+pub fn choose_local_port_candidate(bind_host: &str) -> Result<u16> {
+    let listener = std::net::TcpListener::bind((bind_host, 0)).map_err(|source| {
+        anyhow!("failed to choose local tunnel port candidate on {bind_host}: {source}")
     })?;
     let port = listener
         .local_addr()
-        .map_err(|source| anyhow!("failed to read reserved local tunnel port: {source}"))?
+        .map_err(|source| anyhow!("failed to read local tunnel port candidate: {source}"))?
         .port();
-    Ok((port, listener))
+    Ok(port)
 }
 
 fn build_remote_command(

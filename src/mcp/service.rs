@@ -58,15 +58,19 @@ impl ServerHandler for PtyMcpServer {
             .build();
         capabilities.tasks = Some(TasksCapability::server_default());
 
-        let ssh_mount_tools = if self.app().ssh_mount_feature_available() {
-            ", ssh_mount, ssh_unmount,"
+        let ssh_tools = if self.app().ssh_mount_feature_available() {
+            "ssh_connect, ssh_session_spawn, ssh_exec, ssh_run, ssh_read_file, \
+             ssh_write_file, ssh_list_dir, ssh_mkdir, ssh_tunnel_open, \
+             ssh_tunnel_close, ssh_mount, ssh_unmount, ssh_list, and ssh_disconnect"
         } else {
-            ","
+            "ssh_connect, ssh_session_spawn, ssh_exec, ssh_run, ssh_read_file, \
+             ssh_write_file, ssh_list_dir, ssh_mkdir, ssh_tunnel_open, \
+             ssh_tunnel_close, ssh_list, and ssh_disconnect"
         };
-        let ssh_mount_resources = if self.app().ssh_mount_feature_available() {
-            ", ssh://mounts,"
+        let ssh_resources = if self.app().ssh_mount_feature_available() {
+            "ssh://connections, ssh://tunnels, and ssh://mounts"
         } else {
-            ","
+            "ssh://connections and ssh://tunnels"
         };
 
         ServerInfo::new(capabilities).with_instructions(
@@ -76,14 +80,12 @@ impl ServerHandler for PtyMcpServer {
                  agent-first: default to compact page.text, request line_number_mode=embedded \
                  only when precise line references matter, and set capture_limit only when you \
                  need initial_output. output_view=raw cannot be combined with \
-                 line_number_mode=embedded. Use ssh_connect, ssh_session_spawn, ssh_exec, \
-                 ssh_run, ssh_read_file, ssh_write_file, ssh_list_dir, ssh_mkdir, \
-                 ssh_tunnel_open, ssh_tunnel_close{ssh_mount_tools} ssh_list, and ssh_disconnect \
-                 to manage SSH connections, remote sessions, remote files, tunnel summaries, and \
-                 mount summaries. ssh_connect requires explicit auth_kind. SSH tunnels default to \
+                 line_number_mode=embedded. Use {ssh_tools} to manage SSH connections, remote \
+                 sessions, remote files, tunnel summaries, and mount summaries. ssh_connect \
+                 requires explicit auth_kind. SSH tunnels default to \
                  bind_host=127.0.0.1 and remote_host=127.0.0.1; non-loopback bind_host values must \
                  be explicitly allowed by policy. Resources expose read-only snapshots, including \
-                 pty://sessions plus ssh://connections, ssh://tunnels{ssh_mount_resources}. \
+                 pty://sessions plus {ssh_resources}. \
                  When SSH mount support is unavailable or a mount fails because local prerequisites \
                  are missing, read ssh://docs/mount-setup and the matching \
                  ssh://docs/mount-setup/{{platform}} guide before suggesting installation steps. \

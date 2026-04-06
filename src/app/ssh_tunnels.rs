@@ -100,10 +100,7 @@ impl SshService {
 
         for _ in 0..max_attempts {
             let assigned_local_port = if validated.local_port == 0 {
-                let (port, listener) =
-                    crate::ssh::runtime::reserve_local_port(&validated.bind_host)?;
-                drop(listener);
-                port
+                crate::ssh::runtime::choose_local_port_candidate(&validated.bind_host)?
             } else {
                 ensure_local_tunnel_port_available(&validated.bind_host, validated.local_port)?;
                 validated.local_port
@@ -189,8 +186,14 @@ impl SshService {
             .ssh_registry
             .get_tunnel(&request.tunnel_id)
             .unwrap_or(tunnel);
-        closed.status = SshTunnelStatus::Closed;
-        closed.last_error = None;
+        let preserve_failure_state = matches!(previous_status, SshTunnelStatus::Failed)
+            || matches!(closed.status, SshTunnelStatus::Failed);
+        if preserve_failure_state {
+            closed.status = SshTunnelStatus::Failed;
+        } else {
+            closed.status = SshTunnelStatus::Closed;
+            closed.last_error = None;
+        }
         closed.pid = None;
         self.context.ssh_registry.upsert_tunnel(closed.clone());
 
@@ -403,4 +406,62 @@ where
     let mut buffer = Vec::new();
     let _ = pipe.read_to_end(&mut buffer).await;
     buffer
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{AppState, Config, app::SshTunnelCloseRequest, ssh::SshConnectionStatus};
+
+    fn default_target() -> crate::ssh::SshTarget {
+        crate::ssh::SshTarget {
+            host_alias: Some("devbox".to_string()),
+            host: "devbox.example.com".to_string(),
+            user: Some("alice".to_string()),
+            port: Some(22),
+        }
+    }
+
+    #[tokio::test]
+    async fn close_tunnel_preserves_failed_status_and_last_error() {
+        let app = AppState::new(Config::default());
+        let mut connection = app.ssh().create_placeholder_connection(default_target());
+        connection.status = SshConnectionStatus::Ready;
+        app.ssh().upsert_connection(connection.clone());
+
+        let tunnel = crate::ssh::SshTunnelSummary {
+            tunnel_id: crate::ssh::SshTunnelId::new(),
+            title: Some("db".to_string()),
+            description: Some("failed tunnel".to_string()),
+            connection_id: connection.connection_id,
+            target_summary: connection.target_summary,
+            kind: crate::ssh::SshTunnelKind::LocalForward,
+            status: crate::ssh::SshTunnelStatus::Failed,
+            bind_host: "127.0.0.1".to_string(),
+            local_port: 15432,
+            remote_host: "127.0.0.1".to_string(),
+            remote_port: 5432,
+            started_at: chrono::Utc::now(),
+            last_error: Some("bind failed".to_string()),
+            pid: None,
+        };
+        app.ssh().upsert_tunnel(tunnel.clone());
+
+        let result = app
+            .ssh()
+            .close_tunnel(SshTunnelCloseRequest {
+                tunnel_id: tunnel.tunnel_id.clone(),
+                force: false,
+            })
+            .await
+            .expect("close_tunnel should succeed for failed tunnel");
+
+        assert_eq!(result.previous_status, crate::ssh::SshTunnelStatus::Failed);
+        assert_eq!(result.current_status, crate::ssh::SshTunnelStatus::Failed);
+        let updated = app
+            .ssh()
+            .get_tunnel(&tunnel.tunnel_id)
+            .expect("tunnel should still exist");
+        assert_eq!(updated.status, crate::ssh::SshTunnelStatus::Failed);
+        assert_eq!(updated.last_error.as_deref(), Some("bind failed"));
+    }
 }
