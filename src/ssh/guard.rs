@@ -36,6 +36,22 @@ pub struct SshMountValidationResult {
 }
 
 #[derive(Debug, Clone)]
+pub struct SshTunnelValidationInput<'a> {
+    pub bind_host: &'a str,
+    pub local_port: u16,
+    pub remote_host: &'a str,
+    pub remote_port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshTunnelValidationResult {
+    pub bind_host: String,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+}
+
+#[derive(Debug, Clone)]
 pub struct SshGuard {
     policy: SshPolicy,
 }
@@ -112,6 +128,57 @@ impl SshGuard {
             local_path,
             remote_path: remote_path.to_string(),
             is_managed_path: is_managed,
+        })
+    }
+
+    pub fn validate_tunnel_request(
+        &self,
+        config: &SshConfig,
+        input: SshTunnelValidationInput<'_>,
+    ) -> Result<SshTunnelValidationResult> {
+        let bind_host = input.bind_host.trim();
+        ensure!(
+            !bind_host.is_empty(),
+            "ssh tunnel bind_host cannot be empty"
+        );
+        self.policy.validate_tunnel_bind_host(bind_host)?;
+
+        let remote_host = input.remote_host.trim();
+        ensure!(
+            !remote_host.is_empty(),
+            "ssh tunnel remote_host cannot be empty"
+        );
+        ensure!(
+            !remote_host.contains(char::is_whitespace),
+            "ssh tunnel remote_host cannot contain whitespace: remote_host={remote_host}"
+        );
+        ensure!(
+            !remote_host.contains(':'),
+            "ssh tunnel remote_host must be a plain host token for TCP forwarding: remote_host={remote_host}"
+        );
+
+        if input.local_port != 0 {
+            ensure!(
+                input.local_port >= config.port_min && input.local_port <= config.port_max,
+                "ssh tunnel local_port is outside allowed ssh policy range: local_port={} port_min={} port_max={}",
+                input.local_port,
+                config.port_min,
+                config.port_max
+            );
+        }
+        ensure!(
+            input.remote_port >= config.port_min && input.remote_port <= config.port_max,
+            "ssh tunnel remote_port is outside allowed ssh policy range: remote_port={} port_min={} port_max={}",
+            input.remote_port,
+            config.port_min,
+            config.port_max
+        );
+
+        Ok(SshTunnelValidationResult {
+            bind_host: bind_host.to_string(),
+            local_port: input.local_port,
+            remote_host: remote_host.to_string(),
+            remote_port: input.remote_port,
         })
     }
 

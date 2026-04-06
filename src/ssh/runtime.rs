@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    net::TcpListener,
     path::PathBuf,
     process::{Output, Stdio},
     sync::{
@@ -16,7 +17,9 @@ use tokio::{
     task::JoinHandle,
 };
 
-use super::model::{SshAuthKind, SshConnectionSummary, SshMountSummary, SshTarget};
+use super::model::{
+    SshAuthKind, SshConnectionSummary, SshMountSummary, SshTarget, SshTunnelSummary,
+};
 
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const DEFAULT_MOUNT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -83,11 +86,31 @@ pub struct SshUnmountRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct SshTunnelPlanRequest {
+    pub ssh_bin_path: Option<PathBuf>,
+    pub target: SshTarget,
+    pub auth_kind: SshAuthKind,
+    pub identity_path: Option<PathBuf>,
+    pub verify_host_key: bool,
+    pub bind_host: String,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+}
+
+#[derive(Debug, Clone)]
 pub struct SshSessionSpawnPlan {
     pub command: String,
     pub args: Vec<String>,
     pub public_args: Vec<String>,
     pub remote_command: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshTunnelPlan {
+    pub command: String,
+    pub args: Vec<String>,
+    pub public_args: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -206,6 +229,91 @@ impl SshRuntime {
             true,
             Some(remote_command),
         ))
+    }
+
+    pub fn build_tunnel_plan(&self, request: SshTunnelPlanRequest) -> Result<SshTunnelPlan> {
+        let ssh_bin_path = ensure_ssh_binary(request.ssh_bin_path)?;
+        let mut args = Vec::new();
+        let mut public_args = Vec::new();
+
+        push_arg(&mut args, &mut public_args, "-N", false);
+        push_arg_pair(
+            &mut args,
+            &mut public_args,
+            "-o",
+            "ExitOnForwardFailure=yes",
+            false,
+        );
+        push_arg_pair(&mut args, &mut public_args, "-o", "BatchMode=yes", false);
+        push_arg_pair(
+            &mut args,
+            &mut public_args,
+            "-o",
+            "NumberOfPasswordPrompts=0",
+            false,
+        );
+        push_arg_pair(
+            &mut args,
+            &mut public_args,
+            "-o",
+            if request.verify_host_key {
+                "StrictHostKeyChecking=yes"
+            } else {
+                "StrictHostKeyChecking=no"
+            },
+            false,
+        );
+        if !request.verify_host_key {
+            push_arg_pair(
+                &mut args,
+                &mut public_args,
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                false,
+            );
+        }
+        if let Some(port) = request.target.port {
+            push_arg_pair(&mut args, &mut public_args, "-p", &port.to_string(), false);
+        }
+        if let Some(identity_path) = request.identity_path {
+            push_arg_pair(
+                &mut args,
+                &mut public_args,
+                "-i",
+                &identity_path.display().to_string(),
+                true,
+            );
+        }
+        push_arg_pair(
+            &mut args,
+            &mut public_args,
+            "-o",
+            if matches!(request.auth_kind, SshAuthKind::SshAgent) {
+                "IdentitiesOnly=no"
+            } else {
+                "IdentitiesOnly=yes"
+            },
+            false,
+        );
+        push_arg_pair(
+            &mut args,
+            &mut public_args,
+            "-L",
+            &format!(
+                "{}:{}:{}:{}",
+                request.bind_host, request.local_port, request.remote_host, request.remote_port
+            ),
+            false,
+        );
+
+        let destination = destination(&request.target);
+        push_arg(&mut args, &mut public_args, &destination, false);
+
+        Ok(SshTunnelPlan {
+            command: ssh_bin_path.display().to_string(),
+            args,
+            public_args,
+        })
     }
 
     pub async fn exec_capture(
@@ -335,6 +443,17 @@ impl SshRuntime {
 
         Err(map_unmount_failure(&request.mount, output))
     }
+}
+
+pub fn reserve_local_port(bind_host: &str) -> Result<(u16, TcpListener)> {
+    let listener = TcpListener::bind((bind_host, 0)).map_err(|source| {
+        anyhow!("failed to reserve local tunnel port on {bind_host}: {source}")
+    })?;
+    let port = listener
+        .local_addr()
+        .map_err(|source| anyhow!("failed to read reserved local tunnel port: {source}"))?
+        .port();
+    Ok((port, listener))
 }
 
 fn build_remote_command(
@@ -769,6 +888,23 @@ fn map_mount_failure(request: &SshMountPlanRequest, output: Output) -> anyhow::E
     )
 }
 
+pub fn map_tunnel_failure(tunnel: &SshTunnelSummary, output: Output) -> anyhow::Error {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+    anyhow!(
+        "ssh tunnel failed: tunnel_id={} target={} bind_host={} local_port={} remote_host={} remote_port={} exit_code={:?} stderr_preview={}",
+        tunnel.tunnel_id.as_str(),
+        tunnel.target_summary,
+        tunnel.bind_host,
+        tunnel.local_port,
+        tunnel.remote_host,
+        tunnel.remote_port,
+        output.status.code(),
+        stderr_preview(&combined)
+    )
+}
+
 fn map_unmount_failure(mount: &SshMountSummary, output: Output) -> anyhow::Error {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -938,10 +1074,15 @@ mod tests {
 
     use crate::ssh::{
         SshAuthKind, SshConnectionId, SshConnectionStatus, SshConnectionSummary, SshMountBackend,
-        SshMountId, SshMountStatus, SshMountSummary, SshTarget,
+        SshMountId, SshMountStatus, SshMountSummary, SshTarget, SshTunnelId, SshTunnelKind,
+        SshTunnelStatus, SshTunnelSummary,
     };
 
-    use super::{SshMountPlanRequest, build_mount_args, build_mount_platform_args};
+    use super::{
+        SshMountPlanRequest, SshRuntime, SshTunnelPlanRequest, build_mount_args,
+        build_mount_platform_args,
+    };
+    use std::path::PathBuf;
 
     fn mount_request(macos_block_apple_metadata: bool) -> SshMountPlanRequest {
         let target = SshTarget {
@@ -978,6 +1119,7 @@ mod tests {
                 last_used_at: None,
                 active_session_count: 0,
                 active_mount_count: 0,
+                active_tunnel_count: 0,
                 metadata: Default::default(),
             },
             auth_kind: SshAuthKind::ConfigAlias,
@@ -1028,5 +1170,59 @@ mod tests {
         assert!(args.contains(&"StrictHostKeyChecking=yes".to_string()));
         assert!(args.contains(&"alice@devbox:/srv/project".to_string()));
         assert!(args.contains(&"/tmp/mount".to_string()));
+    }
+
+    #[test]
+    fn build_tunnel_plan_includes_local_forward_and_exit_on_failure() {
+        let request = SshTunnelPlanRequest {
+            ssh_bin_path: Some(PathBuf::from("/usr/bin/ssh")),
+            target: SshTarget {
+                host_alias: Some("devbox".to_string()),
+                host: "devbox.example.com".to_string(),
+                user: Some("alice".to_string()),
+                port: Some(2222),
+            },
+            auth_kind: SshAuthKind::ConfigAlias,
+            identity_path: None,
+            verify_host_key: true,
+            bind_host: "127.0.0.1".to_string(),
+            local_port: 15432,
+            remote_host: "127.0.0.1".to_string(),
+            remote_port: 5432,
+        };
+
+        let plan = SshRuntime.build_tunnel_plan(request).unwrap();
+        assert!(plan.args.contains(&"-N".to_string()));
+        assert!(plan.args.contains(&"ExitOnForwardFailure=yes".to_string()));
+        assert!(
+            plan.args
+                .contains(&"127.0.0.1:15432:127.0.0.1:5432".to_string())
+        );
+        assert!(plan.args.contains(&"alice@devbox".to_string()));
+    }
+
+    #[test]
+    fn tunnel_summary_serialization_shape_is_stable() {
+        let summary = SshTunnelSummary {
+            tunnel_id: SshTunnelId::new(),
+            title: Some("db".to_string()),
+            description: Some("db tunnel".to_string()),
+            connection_id: SshConnectionId::new(),
+            target_summary: "alice@devbox:22".to_string(),
+            kind: SshTunnelKind::LocalForward,
+            status: SshTunnelStatus::Active,
+            bind_host: "127.0.0.1".to_string(),
+            local_port: 15432,
+            remote_host: "127.0.0.1".to_string(),
+            remote_port: 5432,
+            started_at: Utc::now(),
+            last_error: None,
+            pid: Some(1234),
+        };
+
+        let value = serde_json::to_value(summary).unwrap();
+        assert_eq!(value["kind"], "local_forward");
+        assert_eq!(value["status"], "active");
+        assert_eq!(value["local_port"], 15432);
     }
 }

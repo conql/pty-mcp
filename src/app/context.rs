@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
+use tokio::{process::Child, sync::Mutex, task::JoinHandle};
 
 use crate::{
     config::{Config, SshConfig},
@@ -10,7 +11,7 @@ use crate::{
     session::SessionRegistry,
     ssh::{
         SshAuthKind, SshCapabilityProbe, SshCapabilityView, SshConnectionId, SshConnectionSummary,
-        SshGuard, SshMountId, SshPolicy, SshRegistry, SshRuntime,
+        SshGuard, SshMountId, SshPolicy, SshRegistry, SshRuntime, SshTunnelId,
     },
 };
 
@@ -30,6 +31,12 @@ pub(crate) struct SshMountRuntimeContext {
 }
 
 #[derive(Debug)]
+pub(crate) struct SshTunnelRuntimeContext {
+    pub(crate) child: Arc<Mutex<Child>>,
+    pub(crate) monitor: JoinHandle<()>,
+}
+
+#[derive(Debug)]
 pub(crate) struct AppContext {
     pub(crate) config: Config,
     pub(crate) ssh_config: SshConfig,
@@ -43,6 +50,7 @@ pub(crate) struct AppContext {
     pub(crate) ssh_connection_runtime_context:
         RwLock<BTreeMap<SshConnectionId, SshConnectionRuntimeContext>>,
     pub(crate) ssh_mount_runtime_context: RwLock<BTreeMap<SshMountId, SshMountRuntimeContext>>,
+    pub(crate) ssh_tunnel_runtime_context: RwLock<BTreeMap<SshTunnelId, SshTunnelRuntimeContext>>,
     pub(crate) ssh_capability_probe: SshCapabilityProbe,
 }
 
@@ -66,6 +74,7 @@ impl AppContext {
             ssh_registry: SshRegistry::new(),
             ssh_connection_runtime_context: RwLock::new(BTreeMap::new()),
             ssh_mount_runtime_context: RwLock::new(BTreeMap::new()),
+            ssh_tunnel_runtime_context: RwLock::new(BTreeMap::new()),
             ssh_capability_probe,
             config,
         }
@@ -147,6 +156,27 @@ impl AppContext {
             .get(mount_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    pub(crate) fn remember_tunnel_runtime_context(
+        &self,
+        tunnel_id: &SshTunnelId,
+        context: SshTunnelRuntimeContext,
+    ) {
+        self.ssh_tunnel_runtime_context
+            .write()
+            .expect("ssh tunnel runtime context lock poisoned")
+            .insert(tunnel_id.clone(), context);
+    }
+
+    pub(crate) fn take_tunnel_runtime_context(
+        &self,
+        tunnel_id: &SshTunnelId,
+    ) -> Option<SshTunnelRuntimeContext> {
+        self.ssh_tunnel_runtime_context
+            .write()
+            .expect("ssh tunnel runtime context lock poisoned")
+            .remove(tunnel_id)
     }
 
     pub(crate) fn resolve_ssh_bin_path(&self) -> Result<PathBuf> {

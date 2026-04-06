@@ -64,9 +64,9 @@ impl ServerHandler for PtyMcpServer {
             ","
         };
         let ssh_mount_resources = if self.app().ssh_mount_feature_available() {
-            " and ssh://mounts"
+            ", ssh://mounts,"
         } else {
-            ""
+            ","
         };
 
         ServerInfo::new(capabilities).with_instructions(
@@ -77,10 +77,13 @@ impl ServerHandler for PtyMcpServer {
                  only when precise line references matter, and set capture_limit only when you \
                  need initial_output. output_view=raw cannot be combined with \
                  line_number_mode=embedded. Use ssh_connect, ssh_session_spawn, ssh_exec, \
-                 ssh_run, ssh_read_file, ssh_write_file, ssh_list_dir, ssh_mkdir{ssh_mount_tools} \
-                 ssh_list, and ssh_disconnect to manage SSH connections, remote sessions, remote \
-                 files, and mount summaries. ssh_connect requires explicit auth_kind. Resources \
-                 expose read-only snapshots, including pty://sessions plus ssh://connections{ssh_mount_resources}. \
+                 ssh_run, ssh_read_file, ssh_write_file, ssh_list_dir, ssh_mkdir, \
+                 ssh_tunnel_open, ssh_tunnel_close{ssh_mount_tools} ssh_list, and ssh_disconnect \
+                 to manage SSH connections, remote sessions, remote files, tunnel summaries, and \
+                 mount summaries. ssh_connect requires explicit auth_kind. SSH tunnels default to \
+                 bind_host=127.0.0.1 and remote_host=127.0.0.1; non-loopback bind_host values must \
+                 be explicitly allowed by policy. Resources expose read-only snapshots, including \
+                 pty://sessions plus ssh://connections, ssh://tunnels{ssh_mount_resources}. \
                  When SSH mount support is unavailable or a mount fails because local prerequisites \
                  are missing, read ssh://docs/mount-setup and the matching \
                  ssh://docs/mount-setup/{{platform}} guide before suggesting installation steps. \

@@ -16,6 +16,7 @@ pub struct SshPolicy {
     denied_hosts: BTreeSet<String>,
     allowed_users: BTreeSet<String>,
     allowed_auth_kinds: BTreeSet<String>,
+    allowed_tunnel_bind_hosts: BTreeSet<String>,
     allow_explicit_mount_paths: bool,
     managed_mount_root: Option<PathBuf>,
     allowed_local_mount_roots: Vec<PathBuf>,
@@ -56,6 +57,7 @@ impl SshPolicy {
             denied_hosts: normalize_set(&config.ssh.denied_hosts),
             allowed_users: normalize_set(&config.ssh.allowed_users),
             allowed_auth_kinds: normalize_set(&config.ssh.allowed_auth_kinds),
+            allowed_tunnel_bind_hosts: normalize_set(&config.ssh.allowed_tunnel_bind_hosts),
             allow_explicit_mount_paths: config.ssh.allow_explicit_mount_paths,
             managed_mount_root,
             allowed_local_mount_roots,
@@ -177,6 +179,24 @@ impl SshPolicy {
         );
 
         Ok(())
+    }
+
+    pub fn validate_tunnel_bind_host(&self, bind_host: &str) -> Result<()> {
+        let normalized = normalize_value(bind_host)
+            .ok_or_else(|| anyhow::anyhow!("ssh tunnel bind_host cannot be empty"))?;
+        let is_loopback = matches!(normalized.as_str(), "127.0.0.1" | "::1" | "localhost");
+        if is_loopback {
+            return Ok(());
+        }
+
+        if self.allowed_tunnel_bind_hosts.contains(&normalized) {
+            return Ok(());
+        }
+
+        bail!(
+            "ssh tunnel bind_host is not allowed by policy: bind_host={bind_host} allowed_tunnel_bind_hosts={:?}",
+            self.allowed_tunnel_bind_hosts
+        )
     }
 
     pub fn validate_local_mount_path(&self, path: &Path) -> Result<()> {

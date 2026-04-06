@@ -78,6 +78,7 @@ fn app_state_exposes_ssh_registry_connection_summary() {
     assert_eq!(fetched.status, SshConnectionStatus::Connecting);
     assert_eq!(fetched.active_session_count, 0);
     assert_eq!(fetched.active_mount_count, 0);
+    assert_eq!(fetched.active_tunnel_count, 0);
 }
 
 #[test]
@@ -174,6 +175,7 @@ fn disconnect_precheck_allows_idle_connection() {
     connection.status = SshConnectionStatus::Ready;
     connection.active_session_count = 0;
     connection.active_mount_count = 0;
+    connection.active_tunnel_count = 0;
     app.ssh().upsert_connection(connection.clone());
 
     app.ssh()
@@ -198,6 +200,7 @@ async fn force_disconnect_requires_cleanup_mounts_to_remove_active_mounts() {
             connection_id: connection.connection_id,
             force: true,
             cleanup_mounts: false,
+            cleanup_tunnels: false,
         })
         .await
         .expect_err("disconnect should require cleanup_mounts=true");
@@ -323,6 +326,14 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
         .iter()
         .find(|tool| tool.name == "ssh_mount")
         .expect("ssh_mount should be registered");
+    let tunnel_open = tool_defs
+        .iter()
+        .find(|tool| tool.name == "ssh_tunnel_open")
+        .expect("ssh_tunnel_open should be registered");
+    let tunnel_close = tool_defs
+        .iter()
+        .find(|tool| tool.name == "ssh_tunnel_close")
+        .expect("ssh_tunnel_close should be registered");
     let read_file = tool_defs
         .iter()
         .find(|tool| tool.name == "ssh_read_file")
@@ -354,6 +365,8 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
     assert_eq!(exec.task_support(), TaskSupport::Optional);
     assert_eq!(run.task_support(), TaskSupport::Optional);
     assert_eq!(mount.task_support(), TaskSupport::Optional);
+    assert_eq!(tunnel_open.task_support(), TaskSupport::Optional);
+    assert_eq!(tunnel_close.task_support(), TaskSupport::Optional);
     assert_eq!(read_file.task_support(), TaskSupport::Optional);
     assert_eq!(write_file.task_support(), TaskSupport::Optional);
     assert_eq!(list_dir.task_support(), TaskSupport::Optional);
@@ -427,6 +440,32 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
     assert!(remote_path_description.contains("absolute path"));
     assert!(remote_path_description.contains("~, or ~/"));
 
+    let tunnel_open_required = tunnel_open
+        .input_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("ssh_tunnel_open should expose required fields");
+    assert!(tunnel_open_required.contains(&serde_json::json!("connection_id")));
+    assert!(tunnel_open_required.contains(&serde_json::json!("local_port")));
+    assert!(tunnel_open_required.contains(&serde_json::json!("remote_port")));
+    let tunnel_open_properties = tunnel_open
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("ssh_tunnel_open properties");
+    assert!(
+        tunnel_open_properties["local_port"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("0")
+    );
+    let tunnel_close_required = tunnel_close
+        .input_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("ssh_tunnel_close should expose required fields");
+    assert!(tunnel_close_required.contains(&serde_json::json!("tunnel_id")));
+
     let read_required = read_file
         .input_schema
         .get("required")
@@ -448,6 +487,8 @@ fn ssh_mount_tools_are_hidden_when_mount_feature_is_unavailable() {
         .collect::<Vec<_>>();
 
     assert!(tool_names.iter().any(|name| name == "ssh_connect"));
+    assert!(tool_names.iter().any(|name| name == "ssh_tunnel_open"));
+    assert!(tool_names.iter().any(|name| name == "ssh_tunnel_close"));
     assert!(tool_names.iter().all(|name| name != "ssh_mount"));
     assert!(tool_names.iter().all(|name| name != "ssh_unmount"));
 }
@@ -509,6 +550,7 @@ async fn ssh_connect_and_ssh_list_support_reuse_flow() -> anyhow::Result<()> {
         .into_typed::<SshListResponse>()?;
     assert_eq!(listed.connections.len(), 1);
     assert!(listed.mounts.is_empty());
+    assert!(listed.tunnels.is_empty());
     assert_eq!(listed.connections[0].connection_id, first.connection_id);
 
     client.cancel().await?;
@@ -545,6 +587,7 @@ async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result
         .map(|resource| resource.raw.uri.as_ref())
         .collect::<Vec<_>>();
     assert!(uris.contains(&"ssh://connections"));
+    assert!(uris.contains(&"ssh://tunnels"));
     assert!(uris.contains(&"ssh://mounts"));
     assert!(
         uris.contains(&format!("ssh://connections/{}", connection.connection_id.as_str()).as_str())
@@ -563,13 +606,17 @@ async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result
     )
     .await?;
     assert_eq!(
-        connection_resource["connection_id"],
+        connection_resource["connection"]["connection_id"],
         connection.connection_id.as_str()
     );
-    assert_eq!(connection_resource["status"], "ready");
+    assert_eq!(connection_resource["connection"]["status"], "ready");
     assert_eq!(
-        connection_resource["target_summary"],
+        connection_resource["connection"]["target_summary"],
         listed.connections[0].target_summary
+    );
+    assert_eq!(
+        connection_resource["relations"]["mount_ids"][0],
+        mount.mount_id.as_str()
     );
 
     let mounts_resource = read_json_resource(&client, "ssh://mounts").await?;
@@ -578,6 +625,9 @@ async fn ssh_resources_expose_connection_and_mount_snapshots() -> anyhow::Result
         serde_json::to_value(&listed.mounts)?
     );
     assert_eq!(listed.mounts[0].target_summary, connection.target_summary);
+
+    let tunnels_resource = read_json_resource(&client, "ssh://tunnels").await?;
+    assert_eq!(tunnels_resource["tunnels"], serde_json::json!([]));
 
     let mount_resource = read_json_resource(
         &client,
@@ -619,6 +669,7 @@ async fn ssh_mount_resources_are_hidden_when_mount_feature_is_unavailable() -> a
         .iter()
         .map(|resource| resource.raw.uri.as_ref())
         .collect::<Vec<_>>();
+    assert!(resource_uris.contains(&"ssh://tunnels"));
     assert!(!resource_uris.contains(&"ssh://mounts"));
     assert!(
         !resource_uris
@@ -632,6 +683,7 @@ async fn ssh_mount_resources_are_hidden_when_mount_feature_is_unavailable() -> a
         .iter()
         .map(|template| template.raw.uri_template.as_ref())
         .collect::<Vec<_>>();
+    assert!(template_uris.contains(&"ssh://tunnels/{id}"));
     assert!(!template_uris.contains(&"ssh://mounts/{id}"));
 
     let read_error = client

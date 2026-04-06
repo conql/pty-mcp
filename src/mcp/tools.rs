@@ -12,13 +12,15 @@ use crate::{
         SshDisconnectRequest as AppSshDisconnectRequest, SshExecRequest as AppSshExecRequest,
         SshMountRequest as AppSshMountRequest, SshRunRequest as AppSshRunRequest,
         SshSessionSpawnRequest as AppSshSessionSpawnRequest,
-        SshUnmountRequest as AppSshUnmountRequest,
+        SshTunnelCloseRequest as AppSshTunnelCloseRequest,
+        SshTunnelOpenRequest as AppSshTunnelOpenRequest, SshUnmountRequest as AppSshUnmountRequest,
     },
     buffer::{BufferReadPage, BufferReadRequest, BufferView},
     session::{ReadView, SessionId, SessionStatus, SessionSummary, SessionTransport, SignalKind},
     ssh::{
         SshAuthKind, SshConnectionId, SshConnectionStatus, SshConnectionSummary, SshMountBackend,
-        SshMountId, SshMountStatus, SshMountSummary, SshTarget,
+        SshMountId, SshMountStatus, SshMountSummary, SshTarget, SshTunnelId, SshTunnelKind,
+        SshTunnelStatus, SshTunnelSummary,
     },
 };
 
@@ -295,6 +297,7 @@ pub struct SshConnectResponse {
 pub struct SshListResponse {
     pub connections: Vec<SshConnectionSummary>,
     pub mounts: Vec<SshMountSummaryView>,
+    pub tunnels: Vec<SshTunnelSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -314,6 +317,62 @@ pub struct SshMountSummaryView {
     pub mounted_at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshTunnelOpenRequest {
+    pub connection_id: SshConnectionId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Local bind address for the forwarded port. Default: 127.0.0.1. Non-loopback addresses must be allowed by policy."
+    )]
+    pub bind_host: Option<String>,
+    #[schemars(
+        description = "Local listening port. Set to 0 to let the server choose an available port."
+    )]
+    pub local_port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Remote host to connect to from the SSH target. Default: 127.0.0.1.")]
+    pub remote_host: Option<String>,
+    #[schemars(description = "Remote TCP port to forward to.")]
+    pub remote_port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Optional short title for display in tunnel listings.")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Optional human-readable note stored with the tunnel. Defaults to a generated summary."
+    )]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshTunnelOpenResponse {
+    pub tunnel_id: SshTunnelId,
+    pub connection_id: SshConnectionId,
+    pub kind: SshTunnelKind,
+    pub status: SshTunnelStatus,
+    pub bind_host: String,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub reused: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshTunnelCloseRequest {
+    pub tunnel_id: SshTunnelId,
+    #[schemars(description = "Force tunnel shutdown immediately. Default: false.")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshTunnelCloseResponse {
+    pub tunnel_id: SshTunnelId,
+    pub previous_status: SshTunnelStatus,
+    pub current_status: SshTunnelStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -580,6 +639,11 @@ pub struct SshDisconnectRequest {
     )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cleanup_mounts: Option<bool>,
+    #[schemars(
+        description = "Close active SSH tunnels during a forced disconnect. Default: false."
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_tunnels: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -589,6 +653,7 @@ pub struct SshDisconnectResponse {
     pub current_status: SshConnectionStatus,
     pub closed_sessions: usize,
     pub closed_mounts: usize,
+    pub closed_tunnels: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -973,7 +1038,47 @@ impl PtyMcpServer {
         Json(SshListResponse {
             connections: result.connections,
             mounts: result.mounts.into_iter().map(Into::into).collect(),
+            tunnels: result.tunnels,
         })
+    }
+
+    #[tool(
+        name = "ssh_tunnel_open",
+        description = "Open or reuse a persistent local SSH tunnel over an existing SSH connection.",
+        execution(task_support = "optional")
+    )]
+    pub async fn ssh_tunnel_open(
+        &self,
+        Parameters(request): Parameters<SshTunnelOpenRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match self
+            .app()
+            .ssh()
+            .open_tunnel(AppSshTunnelOpenRequest {
+                connection_id: request.connection_id.clone(),
+                bind_host: request.bind_host,
+                local_port: request.local_port,
+                remote_host: request.remote_host,
+                remote_port: request.remote_port,
+                title: request.title,
+                description: request.description,
+            })
+            .await
+        {
+            Ok(result) => structured(&SshTunnelOpenResponse {
+                tunnel_id: result.tunnel.tunnel_id,
+                connection_id: result.tunnel.connection_id,
+                kind: result.tunnel.kind,
+                status: result.tunnel.status,
+                bind_host: result.tunnel.bind_host,
+                local_port: result.tunnel.local_port,
+                remote_host: result.tunnel.remote_host,
+                remote_port: result.tunnel.remote_port,
+                started_at: result.tunnel.started_at,
+                reused: result.reused,
+            }),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
+        }
     }
 
     #[tool(
@@ -1255,6 +1360,33 @@ impl PtyMcpServer {
     }
 
     #[tool(
+        name = "ssh_tunnel_close",
+        description = "Close a persistent SSH tunnel.",
+        execution(task_support = "optional")
+    )]
+    pub async fn ssh_tunnel_close(
+        &self,
+        Parameters(request): Parameters<SshTunnelCloseRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match self
+            .app()
+            .ssh()
+            .close_tunnel(AppSshTunnelCloseRequest {
+                tunnel_id: request.tunnel_id,
+                force: request.force.unwrap_or(false),
+            })
+            .await
+        {
+            Ok(result) => structured(&SshTunnelCloseResponse {
+                tunnel_id: result.tunnel_id,
+                previous_status: result.previous_status,
+                current_status: result.current_status,
+            }),
+            Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
+        }
+    }
+
+    #[tool(
         name = "ssh_disconnect",
         description = "Disconnect an SSH connection and optionally clean up related sessions and mounts.",
         execution(task_support = "optional")
@@ -1270,6 +1402,7 @@ impl PtyMcpServer {
                 connection_id: request.connection_id,
                 force: request.force.unwrap_or(false),
                 cleanup_mounts: request.cleanup_mounts.unwrap_or(false),
+                cleanup_tunnels: request.cleanup_tunnels.unwrap_or(false),
             })
             .await
         {
@@ -1279,6 +1412,7 @@ impl PtyMcpServer {
                 current_status: result.current_status,
                 closed_sessions: result.closed_sessions,
                 closed_mounts: result.closed_mounts,
+                closed_tunnels: result.closed_tunnels,
             }),
             Err(error) => Ok::<CallToolResult, ErrorData>(tool_execution_error(error)),
         }

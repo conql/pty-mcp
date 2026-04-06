@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 
 use crate::ssh::{
     SshAuthKind, SshConnectionId, SshConnectionStatus, SshConnectionSummary, SshMountId,
-    SshMountStatus, SshMountSummary,
+    SshMountStatus, SshMountSummary, SshTunnelId, SshTunnelStatus, SshTunnelSummary,
 };
 
 #[derive(Debug, Clone)]
@@ -38,6 +38,7 @@ pub struct SshConnectResult {
 pub struct SshListResult {
     pub connections: Vec<SshConnectionSummary>,
     pub mounts: Vec<SshMountSummary>,
+    pub tunnels: Vec<SshTunnelSummary>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +120,7 @@ pub struct SshDisconnectRequest {
     pub connection_id: SshConnectionId,
     pub force: bool,
     pub cleanup_mounts: bool,
+    pub cleanup_tunnels: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +130,37 @@ pub struct SshDisconnectResult {
     pub current_status: SshConnectionStatus,
     pub closed_sessions: usize,
     pub closed_mounts: usize,
+    pub closed_tunnels: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshTunnelOpenRequest {
+    pub connection_id: SshConnectionId,
+    pub bind_host: Option<String>,
+    pub local_port: u16,
+    pub remote_host: Option<String>,
+    pub remote_port: u16,
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshTunnelOpenResult {
+    pub tunnel: SshTunnelSummary,
+    pub reused: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshTunnelCloseRequest {
+    pub tunnel_id: SshTunnelId,
+    pub force: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshTunnelCloseResult {
+    pub tunnel_id: SshTunnelId,
+    pub previous_status: SshTunnelStatus,
+    pub current_status: SshTunnelStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
