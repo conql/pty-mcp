@@ -4,6 +4,7 @@ mod ssh_connections;
 mod ssh_files;
 mod ssh_mounts;
 mod ssh_sessions;
+mod ssh_tunnels;
 mod support;
 pub mod types;
 
@@ -17,8 +18,9 @@ pub use types::{
     SpawnSessionRequest, SshConnectRequest, SshConnectResult, SshDirectoryEntry,
     SshDirectoryEntryType, SshDisconnectRequest, SshDisconnectResult, SshExecRequest,
     SshListDirectoryResult, SshListResult, SshMkdirResult, SshMountRequest, SshReadFileResult,
-    SshRunRequest, SshRunResult, SshSessionSpawnRequest, SshUnmountRequest, SshUnmountResult,
-    SshWriteFileResult,
+    SshRunRequest, SshRunResult, SshSessionSpawnRequest, SshTunnelCloseRequest,
+    SshTunnelCloseResult, SshTunnelOpenRequest, SshTunnelOpenResult, SshUnmountRequest,
+    SshUnmountResult, SshWriteFileResult,
 };
 
 use crate::{Config, buffer::BufferReadRequest, session::SessionId, ssh::SshCapabilityView};

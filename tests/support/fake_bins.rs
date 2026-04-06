@@ -69,7 +69,7 @@ impl FakeBins {
         write_fake_executable(
             &ssh_path,
             &format!(
-                "#!/bin/sh\nset -eu\nlog={log}\nprintf 'ssh argc=%s argv=%s\\n' \"$#\" \"$*\" >> \"$log\"\nif [ \"${{1:-}}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nif [ -z \"$last\" ]; then exit 0; fi\nexec /bin/sh -lc \"$last\"\n",
+                "#!/bin/sh\nset -eu\nlog={log}\nprintf 'ssh argc=%s argv=%s\\n' \"$#\" \"$*\" >> \"$log\"\nif [ \"${{1:-}}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"-N\" ]; then\n    trap 'exit 0' TERM INT\n    while :; do sleep 1; done\n  fi\ndone\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nif [ -z \"$last\" ]; then exit 0; fi\nexec /bin/sh -lc \"$last\"\n",
                 log = shell_quote(&ssh_log_path),
             ),
         )?;

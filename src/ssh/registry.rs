@@ -10,18 +10,20 @@ use crate::session::SessionId;
 
 use super::model::{
     SshConnectionId, SshConnectionStatus, SshConnectionSummary, SshMountBackend, SshMountId,
-    SshMountStatus, SshMountSummary, SshTarget,
+    SshMountStatus, SshMountSummary, SshTarget, SshTunnelId, SshTunnelKind, SshTunnelStatus,
+    SshTunnelSummary,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SshConnectionResourceCounts {
     pub active_session_count: usize,
     pub active_mount_count: usize,
+    pub active_tunnel_count: usize,
 }
 
 impl SshConnectionResourceCounts {
     pub const fn has_active_resources(self) -> bool {
-        self.active_session_count > 0 || self.active_mount_count > 0
+        self.active_session_count > 0 || self.active_mount_count > 0 || self.active_tunnel_count > 0
     }
 }
 
@@ -29,6 +31,7 @@ impl SshConnectionResourceCounts {
 pub struct SshConnectionRelations {
     pub session_ids: Vec<SessionId>,
     pub mount_ids: Vec<SshMountId>,
+    pub tunnel_ids: Vec<SshTunnelId>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,8 +43,10 @@ pub struct SshRegistry {
 struct SshRegistryInner {
     connections: BTreeMap<SshConnectionId, SshConnectionSummary>,
     mounts: BTreeMap<SshMountId, SshMountSummary>,
+    tunnels: BTreeMap<SshTunnelId, SshTunnelSummary>,
     connection_sessions: BTreeMap<SshConnectionId, BTreeSet<SessionId>>,
     connection_mounts: BTreeMap<SshConnectionId, BTreeSet<SshMountId>>,
+    connection_tunnels: BTreeMap<SshConnectionId, BTreeSet<SshTunnelId>>,
     session_connections: BTreeMap<SessionId, SshConnectionId>,
 }
 
@@ -78,6 +83,16 @@ impl SshRegistry {
             .collect()
     }
 
+    pub fn list_tunnels(&self) -> Vec<SshTunnelSummary> {
+        self.inner
+            .read()
+            .expect("ssh registry poisoned")
+            .tunnels
+            .values()
+            .cloned()
+            .collect()
+    }
+
     pub fn list_mounts_for_connection(
         &self,
         connection_id: &SshConnectionId,
@@ -103,6 +118,21 @@ impl SshRegistry {
             .unwrap_or_default()
     }
 
+    pub fn list_tunnels_for_connection(
+        &self,
+        connection_id: &SshConnectionId,
+    ) -> Vec<SshTunnelSummary> {
+        let inner = self.inner.read().expect("ssh registry poisoned");
+        let Some(tunnel_ids) = inner.connection_tunnels.get(connection_id) else {
+            return Vec::new();
+        };
+
+        tunnel_ids
+            .iter()
+            .filter_map(|tunnel_id| inner.tunnels.get(tunnel_id).cloned())
+            .collect()
+    }
+
     pub fn get_connection(&self, connection_id: &SshConnectionId) -> Option<SshConnectionSummary> {
         self.inner
             .read()
@@ -118,6 +148,15 @@ impl SshRegistry {
             .expect("ssh registry poisoned")
             .mounts
             .get(mount_id)
+            .cloned()
+    }
+
+    pub fn get_tunnel(&self, tunnel_id: &SshTunnelId) -> Option<SshTunnelSummary> {
+        self.inner
+            .read()
+            .expect("ssh registry poisoned")
+            .tunnels
+            .get(tunnel_id)
             .cloned()
     }
 
@@ -138,6 +177,10 @@ impl SshRegistry {
             .or_default();
         inner
             .connection_mounts
+            .entry(connection_id.clone())
+            .or_default();
+        inner
+            .connection_tunnels
             .entry(connection_id.clone())
             .or_default();
 
@@ -179,6 +222,27 @@ impl SshRegistry {
             .entry(connection_id.clone())
             .or_default()
             .insert(mount_id);
+        touch_connection_inner(&mut inner, &connection_id);
+        refresh_connection_counts(&mut inner, &connection_id);
+    }
+
+    pub fn upsert_tunnel(&self, summary: SshTunnelSummary) {
+        let mut inner = self.inner.write().expect("ssh registry poisoned");
+        let tunnel_id = summary.tunnel_id.clone();
+        let connection_id = summary.connection_id.clone();
+
+        if let Some(previous) = inner.tunnels.insert(tunnel_id.clone(), summary) {
+            if let Some(tunnels) = inner.connection_tunnels.get_mut(&previous.connection_id) {
+                tunnels.remove(&tunnel_id);
+            }
+            refresh_connection_counts(&mut inner, &previous.connection_id);
+        }
+
+        inner
+            .connection_tunnels
+            .entry(connection_id.clone())
+            .or_default()
+            .insert(tunnel_id);
         touch_connection_inner(&mut inner, &connection_id);
         refresh_connection_counts(&mut inner, &connection_id);
     }
@@ -296,6 +360,12 @@ impl SshRegistry {
             }
         }
 
+        if let Some(tunnel_ids) = inner.connection_tunnels.remove(connection_id) {
+            for tunnel_id in tunnel_ids {
+                inner.tunnels.remove(&tunnel_id);
+            }
+        }
+
         inner.connections.remove(connection_id)
     }
 
@@ -332,6 +402,39 @@ impl SshRegistry {
         removed
     }
 
+    pub fn remove_tunnel(&self, tunnel_id: &SshTunnelId) -> Option<SshTunnelSummary> {
+        let mut inner = self.inner.write().expect("ssh registry poisoned");
+        let tunnel = inner.tunnels.remove(tunnel_id)?;
+
+        if let Some(tunnels) = inner.connection_tunnels.get_mut(&tunnel.connection_id) {
+            tunnels.remove(tunnel_id);
+        }
+        touch_connection_inner(&mut inner, &tunnel.connection_id);
+        refresh_connection_counts(&mut inner, &tunnel.connection_id);
+        Some(tunnel)
+    }
+
+    pub fn remove_tunnels_for_connection(&self, connection_id: &SshConnectionId) -> usize {
+        let mut inner = self.inner.write().expect("ssh registry poisoned");
+        let Some(tunnel_ids) = inner.connection_tunnels.remove(connection_id) else {
+            return 0;
+        };
+
+        let mut removed = 0usize;
+        for tunnel_id in tunnel_ids {
+            if inner.tunnels.remove(&tunnel_id).is_some() {
+                removed += 1;
+            }
+        }
+        inner
+            .connection_tunnels
+            .entry(connection_id.clone())
+            .or_default();
+        touch_connection_inner(&mut inner, connection_id);
+        refresh_connection_counts(&mut inner, connection_id);
+        removed
+    }
+
     pub fn has_active_sessions(&self, connection_id: &SshConnectionId) -> bool {
         self.active_resource_counts(connection_id)
             .map(|counts| counts.active_session_count > 0)
@@ -347,6 +450,12 @@ impl SshRegistry {
     pub fn has_active_resources(&self, connection_id: &SshConnectionId) -> bool {
         self.active_resource_counts(connection_id)
             .map(SshConnectionResourceCounts::has_active_resources)
+            .unwrap_or(false)
+    }
+
+    pub fn has_active_tunnels(&self, connection_id: &SshConnectionId) -> bool {
+        self.active_resource_counts(connection_id)
+            .map(|counts| counts.active_tunnel_count > 0)
             .unwrap_or(false)
     }
 
@@ -366,6 +475,7 @@ impl SshRegistry {
                 .map(BTreeSet::len)
                 .unwrap_or(0),
             active_mount_count: active_mount_count(&inner, connection_id),
+            active_tunnel_count: active_tunnel_count(&inner, connection_id),
         })
     }
 
@@ -386,6 +496,11 @@ impl SshRegistry {
                 .unwrap_or_default(),
             mount_ids: inner
                 .connection_mounts
+                .get(connection_id)
+                .map(|items| items.iter().cloned().collect())
+                .unwrap_or_default(),
+            tunnel_ids: inner
+                .connection_tunnels
                 .get(connection_id)
                 .map(|items| items.iter().cloned().collect())
                 .unwrap_or_default(),
@@ -413,6 +528,14 @@ impl SshRegistry {
             );
         }
 
+        if counts.active_tunnel_count > 0 {
+            bail!(
+                "ssh connection still has active tunnels: connection_id={} active_tunnel_count={}",
+                connection_id.as_str(),
+                counts.active_tunnel_count
+            );
+        }
+
         Ok(())
     }
 
@@ -429,6 +552,7 @@ impl SshRegistry {
             last_used_at: None,
             active_session_count: 0,
             active_mount_count: 0,
+            active_tunnel_count: 0,
             metadata: Default::default(),
         };
         self.upsert_connection(summary.clone());
@@ -462,6 +586,38 @@ impl SshRegistry {
         self.upsert_mount(summary.clone());
         Ok(summary)
     }
+
+    pub fn create_placeholder_tunnel(
+        &self,
+        connection_id: &SshConnectionId,
+        bind_host: impl Into<String>,
+        local_port: u16,
+        remote_host: impl Into<String>,
+        remote_port: u16,
+    ) -> Result<SshTunnelSummary> {
+        let connection = self
+            .get_connection(connection_id)
+            .ok_or_else(|| ssh_connection_not_found(connection_id))?;
+
+        let summary = SshTunnelSummary {
+            tunnel_id: SshTunnelId::new(),
+            title: None,
+            description: None,
+            connection_id: connection_id.clone(),
+            target_summary: connection.target_summary,
+            kind: SshTunnelKind::LocalForward,
+            status: SshTunnelStatus::Opening,
+            bind_host: bind_host.into(),
+            local_port,
+            remote_host: remote_host.into(),
+            remote_port,
+            started_at: Utc::now(),
+            last_error: None,
+            pid: None,
+        };
+        self.upsert_tunnel(summary.clone());
+        Ok(summary)
+    }
 }
 
 fn refresh_connection_counts(inner: &mut SshRegistryInner, connection_id: &SshConnectionId) {
@@ -471,10 +627,12 @@ fn refresh_connection_counts(inner: &mut SshRegistryInner, connection_id: &SshCo
         .map(BTreeSet::len)
         .unwrap_or(0);
     let active_mount_count = active_mount_count(inner, connection_id);
+    let active_tunnel_count = active_tunnel_count(inner, connection_id);
 
     if let Some(connection) = inner.connections.get_mut(connection_id) {
         connection.active_session_count = active_session_count;
         connection.active_mount_count = active_mount_count;
+        connection.active_tunnel_count = active_tunnel_count;
     }
 }
 
@@ -497,6 +655,25 @@ fn active_mount_count(inner: &SshRegistryInner, connection_id: &SshConnectionId)
         .unwrap_or(0)
 }
 
+fn active_tunnel_count(inner: &SshRegistryInner, connection_id: &SshConnectionId) -> usize {
+    inner
+        .connection_tunnels
+        .get(connection_id)
+        .map(|tunnel_ids| {
+            tunnel_ids
+                .iter()
+                .filter(|tunnel_id| {
+                    inner
+                        .tunnels
+                        .get(*tunnel_id)
+                        .map(|tunnel| is_active_tunnel_status(&tunnel.status))
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 fn touch_connection_inner(inner: &mut SshRegistryInner, connection_id: &SshConnectionId) {
     if let Some(connection) = inner.connections.get_mut(connection_id) {
         connection.last_used_at = Some(Utc::now());
@@ -507,6 +684,13 @@ fn is_active_mount_status(status: &SshMountStatus) -> bool {
     matches!(
         status,
         SshMountStatus::Mounting | SshMountStatus::Mounted | SshMountStatus::Unmounting
+    )
+}
+
+fn is_active_tunnel_status(status: &SshTunnelStatus) -> bool {
+    matches!(
+        status,
+        SshTunnelStatus::Opening | SshTunnelStatus::Active | SshTunnelStatus::Closing
     )
 }
 

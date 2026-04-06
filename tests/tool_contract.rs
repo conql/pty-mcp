@@ -34,6 +34,8 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
         "pty_list",
         "pty_kill",
         "pty_wait",
+        "ssh_tunnel_open",
+        "ssh_tunnel_close",
     ];
 
     let tool_definitions = server.tool_definitions();
@@ -159,6 +161,34 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
         .unwrap_or_default();
     assert!(connect_required.contains(&serde_json::json!("auth_kind")));
     assert!(!connect_required.contains(&serde_json::json!("description")));
+
+    let tunnel_open_schema = server
+        .tool_definitions()
+        .into_iter()
+        .find(|tool| tool.name == "ssh_tunnel_open")
+        .expect("ssh_tunnel_open tool")
+        .input_schema;
+    let tunnel_open_required = tunnel_open_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(tunnel_open_required.contains(&serde_json::json!("connection_id")));
+    assert!(tunnel_open_required.contains(&serde_json::json!("local_port")));
+    assert!(tunnel_open_required.contains(&serde_json::json!("remote_port")));
+
+    let tunnel_close_schema = server
+        .tool_definitions()
+        .into_iter()
+        .find(|tool| tool.name == "ssh_tunnel_close")
+        .expect("ssh_tunnel_close tool")
+        .input_schema;
+    let tunnel_close_required = tunnel_close_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(tunnel_close_required.contains(&serde_json::json!("tunnel_id")));
 
     Ok(())
 }

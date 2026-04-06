@@ -17,6 +17,7 @@ use crate::{
 const SESSIONS_URI: &str = "pty://sessions";
 const SSH_CONNECTIONS_URI: &str = "ssh://connections";
 const SSH_MOUNTS_URI: &str = "ssh://mounts";
+const SSH_TUNNELS_URI: &str = "ssh://tunnels";
 const SSH_MOUNT_SETUP_URI: &str = "ssh://docs/mount-setup";
 const SSH_MOUNT_SETUP_TEMPLATE_URI: &str = "ssh://docs/mount-setup/{platform}";
 const TAIL_LINE_COUNT: usize = 100;
@@ -80,6 +81,14 @@ pub fn list_resources(app: &AppState) -> ListResourcesResult {
         );
     }
 
+    resources.push(
+        RawResource::new(SSH_TUNNELS_URI, "ssh-tunnels")
+            .with_title("SSH Tunnels")
+            .with_description("Structured summary of all known SSH tunnels.")
+            .with_mime_type("application/json")
+            .no_annotation(),
+    );
+
     for session in app.local().list_sessions() {
         let id = session.session_id.as_str();
         resources.push(
@@ -138,6 +147,20 @@ pub fn list_resources(app: &AppState) -> ListResourcesResult {
         }
     }
 
+    for tunnel in app.ssh().list_tunnels() {
+        let id = tunnel.tunnel_id.as_str();
+        resources.push(
+            RawResource::new(
+                format!("{SSH_TUNNELS_URI}/{id}"),
+                format!("ssh-tunnel-{id}"),
+            )
+            .with_title(format!("SSH Tunnel {id}"))
+            .with_description("Structured SSH tunnel snapshot.")
+            .with_mime_type("application/json")
+            .no_annotation(),
+        );
+    }
+
     ListResourcesResult::with_all_items(resources)
 }
 
@@ -167,6 +190,11 @@ pub fn list_resource_templates(app: &AppState) -> ListResourceTemplatesResult {
             .with_title("SSH Mount Setup Guide (Platform)")
             .with_description("Platform-specific installation and troubleshooting guide.")
             .with_mime_type("text/markdown")
+            .no_annotation(),
+        RawResourceTemplate::new("ssh://tunnels/{id}", "ssh-tunnel")
+            .with_title("SSH Tunnel Snapshot")
+            .with_description("Snapshot for a single SSH tunnel.")
+            .with_mime_type("application/json")
             .no_annotation(),
     ];
 
@@ -200,12 +228,19 @@ pub fn read_resource(app: &AppState, uri: &str) -> Result<ReadResourceResult, Er
                     .collect::<Vec<_>>()
             }),
         ),
+        SSH_TUNNELS_URI => json_contents(
+            uri,
+            json!({
+                "tunnels": app.ssh().list_tunnels()
+            }),
+        ),
         SSH_MOUNT_SETUP_URI => markdown_contents(uri, SSH_MOUNT_SETUP_GUIDE),
         _ if uri.starts_with("pty://sessions/") => read_session_resource(app, uri)?,
         _ if uri.starts_with("ssh://connections/") => read_ssh_connection_resource(app, uri)?,
         _ if uri.starts_with("ssh://mounts/") && app.ssh_mount_feature_available() => {
             read_ssh_mount_resource(app, uri)?
         }
+        _ if uri.starts_with("ssh://tunnels/") => read_ssh_tunnel_resource(app, uri)?,
         _ if uri.starts_with("ssh://docs/mount-setup/") => read_ssh_mount_setup_doc(uri)?,
         _ => return Err(resource_not_found()),
     };
@@ -312,10 +347,21 @@ fn read_ssh_connection_resource(app: &AppState, uri: &str) -> Result<ResourceCon
         .ssh()
         .get_connection(&connection_id)
         .ok_or_else(resource_not_found)?;
+    let relations = app
+        .ssh()
+        .connection_relations(&connection_id)
+        .map_err(internal_resource_error)?;
 
     Ok(json_contents(
         uri,
-        serde_json::to_value(connection).unwrap_or_default(),
+        json!({
+            "connection": connection,
+            "relations": {
+                "session_ids": relations.session_ids,
+                "mount_ids": relations.mount_ids,
+                "tunnel_ids": relations.tunnel_ids,
+            }
+        }),
     ))
 }
 
@@ -333,6 +379,24 @@ fn read_ssh_mount_resource(app: &AppState, uri: &str) -> Result<ResourceContents
     Ok(json_contents(
         uri,
         serde_json::to_value(SshMountSummaryView::from(mount)).unwrap_or_default(),
+    ))
+}
+
+fn read_ssh_tunnel_resource(app: &AppState, uri: &str) -> Result<ResourceContents, ErrorData> {
+    let tunnel_id = uri
+        .strip_prefix("ssh://tunnels/")
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+        .ok_or_else(resource_not_found)?;
+    let tunnel_id =
+        crate::ssh::SshTunnelId::from_str(tunnel_id).map_err(|_| resource_not_found())?;
+    let tunnel = app
+        .ssh()
+        .get_tunnel(&tunnel_id)
+        .ok_or_else(resource_not_found)?;
+
+    Ok(json_contents(
+        uri,
+        serde_json::to_value(tunnel).unwrap_or_default(),
     ))
 }
 

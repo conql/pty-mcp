@@ -22,6 +22,7 @@ pub struct SshConfig {
     pub denied_hosts: Vec<String>,
     pub allowed_users: Vec<String>,
     pub allowed_auth_kinds: Vec<String>,
+    pub allowed_tunnel_bind_hosts: Vec<String>,
     pub allow_explicit_mount_paths: bool,
     pub allowed_mount_roots: Vec<PathBuf>,
     pub port_min: u16,
@@ -41,6 +42,11 @@ impl Default for SshConfig {
             denied_hosts: Vec::new(),
             allowed_users: Vec::new(),
             allowed_auth_kinds: Vec::new(),
+            allowed_tunnel_bind_hosts: vec![
+                "127.0.0.1".to_string(),
+                "::1".to_string(),
+                "localhost".to_string(),
+            ],
             allow_explicit_mount_paths: true,
             allowed_mount_roots: Vec::new(),
             port_min: 1,
@@ -212,6 +218,10 @@ impl Config {
         if let Ok(value) = env::var("PTY_MCP_SSH_ALLOWED_AUTH_KINDS") {
             config.ssh.allowed_auth_kinds =
                 parse_auth_kinds("PTY_MCP_SSH_ALLOWED_AUTH_KINDS", &value)?;
+        }
+
+        if let Ok(value) = env::var("PTY_MCP_SSH_ALLOWED_TUNNEL_BIND_HOSTS") {
+            config.ssh.allowed_tunnel_bind_hosts = parse_csv(&value);
         }
 
         if let Ok(value) = env::var("PTY_MCP_SSH_ALLOW_EXPLICIT_MOUNT_PATHS") {

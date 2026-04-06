@@ -10,7 +10,7 @@ pub use guard::SshGuard;
 pub use model::{
     MacFuseCapability, SshAuthKind, SshBinaryCapability, SshCapabilityView, SshConnectionId,
     SshConnectionStatus, SshConnectionSummary, SshMountBackend, SshMountId, SshMountStatus,
-    SshMountSummary, SshTarget,
+    SshMountSummary, SshTarget, SshTunnelId, SshTunnelKind, SshTunnelStatus, SshTunnelSummary,
 };
 pub use policy::SshPolicy;
 pub use registry::{SshConnectionRelations, SshConnectionResourceCounts, SshRegistry};

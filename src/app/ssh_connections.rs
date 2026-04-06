@@ -6,7 +6,7 @@ use crate::{
     ssh::{
         SshAuthKind, SshCapabilityView, SshConnectionId, SshConnectionRelations,
         SshConnectionResourceCounts, SshConnectionStatus, SshConnectionSummary, SshMountId,
-        SshMountSummary, SshTarget,
+        SshMountSummary, SshTarget, SshTunnelId, SshTunnelSummary,
     },
 };
 
@@ -15,7 +15,7 @@ use super::{
     context::{AppContext, SshConnectionRuntimeContext},
     types::{
         SshConnectRequest, SshConnectResult, SshDisconnectRequest, SshDisconnectResult,
-        SshListResult, SshUnmountRequest,
+        SshListResult, SshTunnelCloseRequest, SshUnmountRequest,
     },
 };
 
@@ -136,6 +136,7 @@ impl SshService {
             last_used_at: Some(Utc::now()),
             active_session_count: 0,
             active_mount_count: 0,
+            active_tunnel_count: 0,
             metadata: Default::default(),
         };
         self.context.ssh_registry.upsert_connection(summary.clone());
@@ -163,6 +164,7 @@ impl SshService {
         SshListResult {
             connections: self.list_connections(),
             mounts: self.list_mounts(),
+            tunnels: self.list_tunnels(),
         }
     }
 
@@ -174,12 +176,20 @@ impl SshService {
         self.context.ssh_registry.list_mounts()
     }
 
+    pub fn list_tunnels(&self) -> Vec<SshTunnelSummary> {
+        self.context.ssh_registry.list_tunnels()
+    }
+
     pub fn get_connection(&self, connection_id: &SshConnectionId) -> Option<SshConnectionSummary> {
         self.context.ssh_registry.get_connection(connection_id)
     }
 
     pub fn get_mount(&self, mount_id: &SshMountId) -> Option<SshMountSummary> {
         self.context.ssh_registry.get_mount(mount_id)
+    }
+
+    pub fn get_tunnel(&self, tunnel_id: &SshTunnelId) -> Option<SshTunnelSummary> {
+        self.context.ssh_registry.get_tunnel(tunnel_id)
     }
 
     pub fn connection_relations(
@@ -218,11 +228,22 @@ impl SshService {
             .active_resource_counts(&request.connection_id)
             .map(|counts| counts.active_mount_count)
             .unwrap_or(0);
+        let active_tunnel_count = self
+            .active_resource_counts(&request.connection_id)
+            .map(|counts| counts.active_tunnel_count)
+            .unwrap_or(0);
         if request.force && active_mount_count > 0 && !request.cleanup_mounts {
             bail!(
                 "ssh connection still has active mounts; set cleanup_mounts=true to force disconnect: connection_id={} active_mount_count={}",
                 request.connection_id.as_str(),
                 active_mount_count
+            );
+        }
+        if request.force && active_tunnel_count > 0 && !request.cleanup_tunnels {
+            bail!(
+                "ssh connection still has active tunnels; set cleanup_tunnels=true to force disconnect: connection_id={} active_tunnel_count={}",
+                request.connection_id.as_str(),
+                active_tunnel_count
             );
         }
 
@@ -234,6 +255,7 @@ impl SshService {
         let result: Result<SshDisconnectResult> = async {
             let mut closed_mounts = 0usize;
             let mut closed_sessions = 0usize;
+            let mut closed_tunnels = 0usize;
 
             if request.cleanup_mounts {
                 for mount_id in relations.mount_ids {
@@ -251,6 +273,24 @@ impl SshService {
                     })
                     .await?;
                     closed_mounts += 1;
+                }
+            }
+
+            if request.cleanup_tunnels {
+                for tunnel_id in relations.tunnel_ids {
+                    let Some(tunnel) = self.get_tunnel(&tunnel_id) else {
+                        continue;
+                    };
+                    if !is_active_tunnel_status(&tunnel.status) {
+                        continue;
+                    }
+
+                    self.close_tunnel(SshTunnelCloseRequest {
+                        tunnel_id,
+                        force: request.force,
+                    })
+                    .await?;
+                    closed_tunnels += 1;
                 }
             }
 
@@ -294,6 +334,7 @@ impl SshService {
                 current_status,
                 closed_sessions,
                 closed_mounts,
+                closed_tunnels,
             })
         }
         .await;
@@ -315,6 +356,7 @@ impl SshService {
                     connection_id: connection.connection_id,
                     force: true,
                     cleanup_mounts: true,
+                    cleanup_tunnels: true,
                 })
                 .await;
         }
@@ -327,6 +369,10 @@ impl SshService {
 
     pub fn upsert_mount(&self, summary: SshMountSummary) {
         self.context.ssh_registry.upsert_mount(summary);
+    }
+
+    pub fn upsert_tunnel(&self, summary: SshTunnelSummary) {
+        self.context.ssh_registry.upsert_tunnel(summary);
     }
 
     pub fn remove_connection(
@@ -350,10 +396,24 @@ impl SshService {
         removed
     }
 
+    pub fn remove_tunnel(&self, tunnel_id: &SshTunnelId) -> Option<SshTunnelSummary> {
+        let removed = self.context.ssh_registry.remove_tunnel(tunnel_id);
+        if removed.is_some() {
+            let _ = self.context.take_tunnel_runtime_context(tunnel_id);
+        }
+        removed
+    }
+
     pub fn remove_mounts_for_connection(&self, connection_id: &SshConnectionId) -> usize {
         self.context
             .ssh_registry
             .remove_mounts_for_connection(connection_id)
+    }
+
+    pub fn remove_tunnels_for_connection(&self, connection_id: &SshConnectionId) -> usize {
+        self.context
+            .ssh_registry
+            .remove_tunnels_for_connection(connection_id)
     }
 
     pub fn track_session(
@@ -495,6 +555,15 @@ fn is_active_mount_status(status: &crate::ssh::SshMountStatus) -> bool {
         crate::ssh::SshMountStatus::Mounting
             | crate::ssh::SshMountStatus::Mounted
             | crate::ssh::SshMountStatus::Unmounting
+    )
+}
+
+fn is_active_tunnel_status(status: &crate::ssh::SshTunnelStatus) -> bool {
+    matches!(
+        status,
+        crate::ssh::SshTunnelStatus::Opening
+            | crate::ssh::SshTunnelStatus::Active
+            | crate::ssh::SshTunnelStatus::Closing
     )
 }
 

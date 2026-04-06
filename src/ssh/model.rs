@@ -98,6 +98,52 @@ impl From<String> for SshMountId {
     }
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(transparent)]
+pub struct SshTunnelId(String);
+
+impl SshTunnelId {
+    pub fn new() -> Self {
+        Self(format!("sshtun_{}", Uuid::new_v4().simple()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for SshTunnelId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for SshTunnelId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for SshTunnelId {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.trim().is_empty() {
+            return Err("ssh tunnel id cannot be empty");
+        }
+
+        Ok(Self(value.to_string()))
+    }
+}
+
+impl From<String> for SshTunnelId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct SshTarget {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,10 +211,27 @@ pub enum SshMountStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SshTunnelStatus {
+    Opening,
+    Active,
+    Closing,
+    Closed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum SshMountBackend {
     Sshfs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum SshTunnelKind {
+    LocalForward,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -231,6 +294,7 @@ pub struct SshConnectionSummary {
     pub last_used_at: Option<DateTime<Utc>>,
     pub active_session_count: usize,
     pub active_mount_count: usize,
+    pub active_tunnel_count: usize,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub metadata: Map<String, Value>,
 }
@@ -252,4 +316,26 @@ pub struct SshMountSummary {
     pub mounted_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SshTunnelSummary {
+    pub tunnel_id: SshTunnelId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub connection_id: SshConnectionId,
+    pub target_summary: String,
+    pub kind: SshTunnelKind,
+    pub status: SshTunnelStatus,
+    pub bind_host: String,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+    pub started_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
