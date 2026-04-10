@@ -406,6 +406,23 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
     assert!(exec_properties.contains_key("output_view"));
     assert!(exec_properties.contains_key("line_number_mode"));
     assert!(
+        exec_properties["cwd"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("~, or ~/")
+    );
+    let run_properties = run
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("ssh_run properties");
+    assert!(
+        run_properties["cwd"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("~, or ~/")
+    );
+    assert!(
         !session_spawn
             .input_schema
             .get("properties")
@@ -422,6 +439,12 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
     assert!(session_spawn_properties.contains_key("capture_limit"));
     assert!(session_spawn_properties.contains_key("output_view"));
     assert!(session_spawn_properties.contains_key("line_number_mode"));
+    assert!(
+        session_spawn_properties["cwd"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("~, or ~/")
+    );
 
     let mount_required = mount
         .input_schema
@@ -473,6 +496,50 @@ fn ssh_mount_tools_are_registered_when_mount_feature_is_available() -> anyhow::R
         .expect("ssh_read_file should expose required fields");
     assert!(read_required.contains(&serde_json::json!("connection_id")));
     assert!(read_required.contains(&serde_json::json!("path")));
+    let read_properties = read_file
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("ssh_read_file properties");
+    assert!(
+        read_properties["path"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("~, or ~/")
+    );
+    let write_properties = write_file
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("ssh_write_file properties");
+    assert!(
+        write_properties["path"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("~, or ~/")
+    );
+    let list_dir_properties = list_dir
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("ssh_list_dir properties");
+    assert!(
+        list_dir_properties["path"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("~, or ~/")
+    );
+    let mkdir_properties = mkdir
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("ssh_mkdir properties");
+    assert!(
+        mkdir_properties["path"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("~, or ~/")
+    );
 
     Ok(())
 }
@@ -1533,6 +1600,227 @@ async fn ssh_file_and_directory_tools_operate_over_existing_connection() -> anyh
         .into_typed::<SshListDirResponse>()?;
     assert!(listed.entries.iter().any(|entry| entry.name == "nested"));
     assert!(listed.entries.iter().any(|entry| entry.name == ".secret"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_file_and_directory_tools_accept_home_relative_paths() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("file_tools_home_relative")?;
+    let ssh_path = sandbox.path.join("ssh");
+    let home_dir = sandbox.path.join("remote-home");
+    fs::create_dir_all(&home_dir)?;
+    let home_dir_quoted = format!(
+        "'{}'",
+        home_dir.display().to_string().replace('\'', "'\"'\"'")
+    );
+    write_fake_executable(
+        &ssh_path,
+        &format!(
+            "#!/bin/sh\nset -eu\nif [ \"${{1:-}}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nexport HOME={home}\nsh -lc \"$last\"\n",
+            home = home_dir_quoted,
+        ),
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    let app = Arc::new(AppState::new(config));
+    let server = PtyMcpServer::new(app);
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let connected = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_connect").with_arguments(
+                serde_json::json!({
+                    "host_alias": "devbox",
+                    "auth_kind": "config_alias",
+                    "user": "alice",
+                    "description": "ssh home-relative file tools contract"
+                })
+                .as_object()
+                .expect("connect args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshConnectResponse>()?;
+    let connection_id = connected.connection_id.clone();
+
+    let created_dir = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_mkdir").with_arguments(
+                serde_json::json!({
+                    "connection_id": connection_id.clone(),
+                    "path": "~/nested",
+                    "create_parents": true
+                })
+                .as_object()
+                .expect("ssh_mkdir args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshMkdirResponse>()?;
+    assert_eq!(created_dir.path, "~/nested");
+    assert!(home_dir.join("nested").is_dir());
+
+    let written = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_write_file").with_arguments(
+                serde_json::json!({
+                    "connection_id": connection_id.clone(),
+                    "path": "~/nested/note.txt",
+                    "content": "alpha\nbeta\n",
+                    "create_parents": true
+                })
+                .as_object()
+                .expect("ssh_write_file args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshWriteFileResponse>()?;
+    assert_eq!(written.path, "~/nested/note.txt");
+    assert_eq!(
+        fs::read_to_string(home_dir.join("nested/note.txt"))?,
+        "alpha\nbeta\n"
+    );
+
+    let read = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_read_file").with_arguments(
+                serde_json::json!({
+                    "connection_id": connection_id.clone(),
+                    "path": "~/nested/note.txt"
+                })
+                .as_object()
+                .expect("ssh_read_file args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshReadFileResponse>()?;
+    assert_eq!(read.path, "~/nested/note.txt");
+    assert_eq!(read.content, "alpha\nbeta\n");
+
+    fs::write(home_dir.join(".secret"), "hidden")?;
+    let listed = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_list_dir").with_arguments(
+                serde_json::json!({
+                    "connection_id": connection_id,
+                    "path": "~",
+                    "include_hidden": true
+                })
+                .as_object()
+                .expect("ssh_list_dir args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshListDirResponse>()?;
+    assert_eq!(listed.path, "~");
+    assert!(listed.entries.iter().any(|entry| entry.name == "nested"));
+    assert!(listed.entries.iter().any(|entry| entry.name == ".secret"));
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_file_tools_reject_relative_paths() -> anyhow::Result<()> {
+    let sandbox = TempDirGuard::new("file_tools_relative_paths")?;
+    let ssh_path = sandbox.path.join("ssh");
+    write_fake_executable(
+        &ssh_path,
+        "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"-V\" ]; then echo 'OpenSSH_9.9p1' 1>&2; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"0\" ]; then exit 0; fi\nsh -lc \"$last\"\n",
+    )?;
+
+    let mut config = Config::default();
+    config.ssh.ssh_bin_path = Some(ssh_path);
+    let app = Arc::new(AppState::new(config));
+    let server = PtyMcpServer::new(app);
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClient.serve(client_transport).await?;
+    let connected = client
+        .call_tool(
+            CallToolRequestParams::new("ssh_connect").with_arguments(
+                serde_json::json!({
+                    "host_alias": "devbox",
+                    "auth_kind": "config_alias",
+                    "user": "alice",
+                    "description": "ssh relative path rejection"
+                })
+                .as_object()
+                .expect("connect args object")
+                .clone(),
+            ),
+        )
+        .await?
+        .into_typed::<SshConnectResponse>()?;
+    let connection_id = connected.connection_id.clone();
+
+    for (tool_name, args) in [
+        (
+            "ssh_read_file",
+            serde_json::json!({
+                "connection_id": connection_id.clone(),
+                "path": "relative/file.txt"
+            }),
+        ),
+        (
+            "ssh_write_file",
+            serde_json::json!({
+                "connection_id": connection_id.clone(),
+                "path": "relative/file.txt",
+                "content": "alpha"
+            }),
+        ),
+        (
+            "ssh_list_dir",
+            serde_json::json!({
+                "connection_id": connection_id.clone(),
+                "path": "relative"
+            }),
+        ),
+        (
+            "ssh_mkdir",
+            serde_json::json!({
+                "connection_id": connection_id.clone(),
+                "path": "relative",
+                "create_parents": true
+            }),
+        ),
+    ] {
+        let result = client
+            .call_tool(
+                CallToolRequestParams::new(tool_name)
+                    .with_arguments(args.as_object().expect("tool args object").clone()),
+            )
+            .await?;
+        assert_eq!(result.is_error, Some(true), "{tool_name} should fail");
+        let structured = result.structured_content.expect("structured error");
+        let message = structured["message"].as_str().expect("error message");
+        assert!(
+            message.contains("absolute path, ~, or ~/..."),
+            "{tool_name}: {message}"
+        );
+    }
 
     client.cancel().await?;
     server_handle.await??;

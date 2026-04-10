@@ -387,7 +387,7 @@ pub struct SshSessionSpawnRequest {
     #[schemars(description = "Argument vector passed to the remote command.")]
     pub args: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(description = "Remote working directory. Must be an absolute path or ~/...")]
+    #[schemars(description = "Remote working directory. Must be an absolute path, ~, or ~/...")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Remote environment overrides. Values must be scalar JSON values.")]
@@ -439,7 +439,7 @@ pub struct SshExecRequest {
     #[schemars(description = "Shell script to execute remotely. Must not be empty.")]
     pub script: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(description = "Remote working directory. Must be an absolute path or ~/...")]
+    #[schemars(description = "Remote working directory. Must be an absolute path, ~, or ~/...")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Remote environment overrides. Values must be scalar JSON values.")]
@@ -488,7 +488,7 @@ pub struct SshRunRequest {
     #[schemars(description = "Shell script to execute remotely. Must not be empty.")]
     pub script: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(description = "Remote working directory. Must be an absolute path or ~/...")]
+    #[schemars(description = "Remote working directory. Must be an absolute path, ~, or ~/...")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Remote environment overrides. Values must be scalar JSON values.")]
@@ -659,6 +659,7 @@ pub struct SshDisconnectResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshReadFileRequest {
     pub connection_id: SshConnectionId,
+    #[schemars(description = "Remote file path. Must be an absolute path, ~, or ~/...")]
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(
@@ -678,6 +679,7 @@ pub struct SshReadFileResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshWriteFileRequest {
     pub connection_id: SshConnectionId,
+    #[schemars(description = "Remote file path. Must be an absolute path, ~, or ~/...")]
     pub path: String,
     #[schemars(description = "UTF-8 file content to write. Maximum size: 262144 bytes.")]
     pub content: String,
@@ -716,6 +718,7 @@ pub struct SshDirectoryEntryView {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshListDirRequest {
     pub connection_id: SshConnectionId,
+    #[schemars(description = "Remote directory path. Must be an absolute path, ~, or ~/...")]
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Whether hidden entries should be included. Default: false.")]
@@ -732,6 +735,7 @@ pub struct SshListDirResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SshMkdirRequest {
     pub connection_id: SshConnectionId,
+    #[schemars(description = "Remote directory path. Must be an absolute path, ~, or ~/...")]
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Create parent directories as needed. Default: false.")]

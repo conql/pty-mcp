@@ -16,8 +16,9 @@ use tokio::{
     task::JoinHandle,
 };
 
-use super::model::{
-    SshAuthKind, SshConnectionSummary, SshMountSummary, SshTarget, SshTunnelSummary,
+use super::{
+    model::{SshAuthKind, SshConnectionSummary, SshMountSummary, SshTarget, SshTunnelSummary},
+    remote_path::SshRemotePath,
 };
 
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
@@ -485,7 +486,7 @@ fn build_remote_command(
     }
 
     if let Some(cwd) = cwd {
-        script_parts.push(build_remote_cwd_command(cwd));
+        script_parts.push(build_remote_cwd_command(cwd)?);
     }
 
     if let Some(command) = command {
@@ -538,7 +539,7 @@ fn build_remote_exec_command(
     }
 
     if let Some(cwd) = cwd {
-        script_parts.push(build_remote_cwd_command(cwd));
+        script_parts.push(build_remote_cwd_command(cwd)?);
     }
 
     let shell_program = shell
@@ -663,19 +664,9 @@ pub(crate) fn shell_escape(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-fn build_remote_cwd_command(cwd: &str) -> String {
-    if cwd == "~" {
-        return "cd -- \"${HOME:-~}\" || exit 1".to_string();
-    }
-
-    if let Some(rest) = cwd.strip_prefix("~/") {
-        if rest.is_empty() {
-            return "cd -- \"${HOME:-~}\" || exit 1".to_string();
-        }
-        return format!("cd -- \"${{HOME:-~}}\"/{} || exit 1", shell_escape(rest));
-    }
-
-    format!("cd -- {} || exit 1", shell_escape(cwd))
+fn build_remote_cwd_command(cwd: &str) -> Result<String> {
+    let cwd = SshRemotePath::parse(cwd, "remote cwd")?;
+    Ok(format!("cd -- {} || exit 1", cwd.render_for_shell()))
 }
 
 fn push_arg(args: &mut Vec<String>, public_args: &mut Vec<String>, value: &str, sensitive: bool) {

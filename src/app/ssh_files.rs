@@ -1,13 +1,13 @@
 use anyhow::{Result, anyhow, bail};
 use std::process::Output;
 
-use crate::ssh::runtime::shell_escape;
+use crate::ssh::{remote_path::SshRemotePath, runtime::shell_escape};
 
 use super::{
     SshService,
     support::{
         parse_file_too_large_marker, remote_command_failed, validate_remote_max_bytes,
-        validate_remote_path, validate_remote_write_size,
+        validate_remote_write_size,
     },
     types::{
         SshDirectoryEntry, SshDirectoryEntryType, SshListDirectoryResult, SshMkdirResult,
@@ -22,11 +22,12 @@ impl SshService {
         path: &str,
         max_bytes: usize,
     ) -> Result<SshReadFileResult> {
-        let path = validate_remote_path(path, "ssh_read_file path")?;
+        let path = SshRemotePath::parse(path, "ssh_read_file path")?;
         let max_bytes = validate_remote_max_bytes(max_bytes)?;
+        let shell_path = path.render_for_shell();
         let script = format!(
             "set -eu\nfile={path}\nbytes=$(wc -c < \"$file\" | tr -d '[:space:]')\ncase \"$bytes\" in\n  ''|*[!0-9]*) echo 'failed to determine file size' >&2; exit 1 ;;\nesac\nif [ \"$bytes\" -gt {max_bytes} ]; then\n  echo \"__PTY_MCP_FILE_TOO_LARGE__:$bytes\" >&2\n  exit 3\nfi\ncat -- \"$file\"",
-            path = shell_escape(path),
+            path = shell_path,
             max_bytes = max_bytes,
         );
         let output = self
@@ -34,7 +35,7 @@ impl SshService {
                 connection_id,
                 &script,
                 Some("failed to read remote file"),
-                Some(path),
+                Some(path.input()),
             )
             .await?;
 
@@ -44,7 +45,7 @@ impl SshService {
                 bail!(
                     "remote file exceeds max_bytes: connection_id={} path={} max_bytes={} actual_bytes={}",
                     connection_id.as_str(),
-                    path,
+                    path.input(),
                     max_bytes,
                     size
                 );
@@ -53,7 +54,7 @@ impl SshService {
             return Err(remote_command_failed(
                 "failed to read remote file",
                 connection_id,
-                Some(path),
+                Some(path.input()),
                 output,
             ));
         }
@@ -63,14 +64,14 @@ impl SshService {
             anyhow!(
                 "remote file is not valid UTF-8 text: connection_id={} path={} bytes_read={}",
                 connection_id.as_str(),
-                path,
+                path.input(),
                 bytes_read
             )
         })?;
 
         Ok(SshReadFileResult {
             connection_id: connection_id.clone(),
-            path: path.to_string(),
+            path: path.input().to_string(),
             content,
             bytes_read,
         })
@@ -84,20 +85,18 @@ impl SshService {
         append: bool,
         create_parents: bool,
     ) -> Result<SshWriteFileResult> {
-        let path = validate_remote_path(path, "ssh_write_file path")?;
+        let path = SshRemotePath::parse(path, "ssh_write_file path")?;
         validate_remote_write_size(content)?;
         let redirect = if append { ">>" } else { ">" };
+        let shell_path = path.render_for_shell();
         let mut script = String::from("set -eu\n");
         if create_parents {
-            script.push_str(&format!(
-                "mkdir -p -- \"$(dirname -- {})\"\n",
-                shell_escape(path)
-            ));
+            script.push_str(&format!("mkdir -p -- \"$(dirname -- {})\"\n", shell_path));
         }
         script.push_str(&format!(
             "printf '%s' {content} {redirect} {path}\n",
             redirect = redirect,
-            path = shell_escape(path),
+            path = shell_path,
             content = shell_escape(content),
         ));
 
@@ -106,21 +105,21 @@ impl SshService {
                 connection_id,
                 &script,
                 Some("failed to write remote file"),
-                Some(path),
+                Some(path.input()),
             )
             .await?;
         if !output.status.success() {
             return Err(remote_command_failed(
                 "failed to write remote file",
                 connection_id,
-                Some(path),
+                Some(path.input()),
                 output,
             ));
         }
 
         Ok(SshWriteFileResult {
             connection_id: connection_id.clone(),
-            path: path.to_string(),
+            path: path.input().to_string(),
             bytes_written: content.len(),
             append,
         })
@@ -132,21 +131,21 @@ impl SshService {
         path: &str,
         include_hidden: bool,
     ) -> Result<SshListDirectoryResult> {
-        let path = validate_remote_path(path, "ssh_list_dir path")?;
+        let path = SshRemotePath::parse(path, "ssh_list_dir path")?;
         let script = build_list_directory_script(path, include_hidden);
         let output = self
             .run_ssh_capture(
                 connection_id,
                 &script,
                 Some("failed to list remote directory"),
-                Some(path),
+                Some(path.input()),
             )
             .await?;
         if !output.status.success() {
             return Err(remote_command_failed(
                 "failed to list remote directory",
                 connection_id,
-                Some(path),
+                Some(path.input()),
                 output,
             ));
         }
@@ -155,14 +154,14 @@ impl SshService {
             anyhow!(
                 "failed to parse remote directory listing: connection_id={} path={} reason={}",
                 connection_id.as_str(),
-                path,
+                path.input(),
                 reason
             )
         })?;
 
         Ok(SshListDirectoryResult {
             connection_id: connection_id.clone(),
-            path: path.to_string(),
+            path: path.input().to_string(),
             entries,
         })
     }
@@ -173,33 +172,33 @@ impl SshService {
         path: &str,
         create_parents: bool,
     ) -> Result<SshMkdirResult> {
-        let path = validate_remote_path(path, "ssh_mkdir path")?;
+        let path = SshRemotePath::parse(path, "ssh_mkdir path")?;
         let flag = if create_parents { "-p " } else { "" };
         let script = format!(
             "set -eu\nmkdir {flag}-- {path}",
             flag = flag,
-            path = shell_escape(path)
+            path = path.render_for_shell()
         );
         let output = self
             .run_ssh_capture(
                 connection_id,
                 &script,
                 Some("failed to create remote directory"),
-                Some(path),
+                Some(path.input()),
             )
             .await?;
         if !output.status.success() {
             return Err(remote_command_failed(
                 "failed to create remote directory",
                 connection_id,
-                Some(path),
+                Some(path.input()),
                 output,
             ));
         }
 
         Ok(SshMkdirResult {
             connection_id: connection_id.clone(),
-            path: path.to_string(),
+            path: path.input().to_string(),
             create_parents,
         })
     }
@@ -251,10 +250,10 @@ impl SshService {
     }
 }
 
-fn build_list_directory_script(path: &str, include_hidden: bool) -> String {
+fn build_list_directory_script(path: SshRemotePath<'_>, include_hidden: bool) -> String {
     let mut script = format!(
         "set -eu\ndir={path}\nif [ ! -d \"$dir\" ]; then\n  echo 'remote path is not a directory' >&2\n  exit 1\nfi\n",
-        path = shell_escape(path)
+        path = path.render_for_shell()
     );
 
     if include_hidden {
@@ -305,6 +304,8 @@ fn parse_directory_entries(bytes: &[u8]) -> Result<Vec<SshDirectoryEntry>, &'sta
 
 #[cfg(test)]
 mod tests {
+    use crate::ssh::remote_path::SshRemotePath;
+
     use super::{build_list_directory_script, parse_directory_entries};
 
     #[test]
@@ -323,9 +324,18 @@ mod tests {
 
     #[test]
     fn directory_script_switches_hidden_glob() {
-        let hidden = build_list_directory_script("/tmp", true);
-        let plain = build_list_directory_script("/tmp", false);
+        let hidden =
+            build_list_directory_script(SshRemotePath::parse("/tmp", "field").unwrap(), true);
+        let plain =
+            build_list_directory_script(SshRemotePath::parse("/tmp", "field").unwrap(), false);
         assert!(hidden.contains("/.[!.]*"));
         assert!(!plain.contains("/.[!.]*"));
+    }
+
+    #[test]
+    fn directory_script_expands_home_relative_paths() {
+        let script =
+            build_list_directory_script(SshRemotePath::parse("~/repo", "field").unwrap(), false);
+        assert!(script.contains("dir=\"${HOME:-~}\"/'repo'"));
     }
 }

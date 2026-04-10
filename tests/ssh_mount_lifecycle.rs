@@ -283,7 +283,7 @@ async fn ssh_mount_rejects_relative_remote_paths_before_invoking_sshfs() -> anyh
         .expect_err("relative remote path should fail");
 
     let text = format!("{error:#}");
-    assert!(text.contains("absolute path or home-relative path"));
+    assert!(text.contains("absolute path, ~, or ~/..."));
     assert!(
         fs::read_to_string(sshfs_log_path)
             .unwrap_or_default()

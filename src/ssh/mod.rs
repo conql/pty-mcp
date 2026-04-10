@@ -3,6 +3,7 @@ pub mod guard;
 pub mod model;
 pub mod policy;
 pub mod registry;
+pub(crate) mod remote_path;
 pub mod runtime;
 
 pub use capability_probe::SshCapabilityProbe;
