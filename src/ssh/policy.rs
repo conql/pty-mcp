@@ -169,7 +169,7 @@ impl SshPolicy {
         Ok(())
     }
 
-    pub fn validate_remote_path(&self, remote_path: &str) -> Result<()> {
+    pub fn validate_absolute_remote_path(&self, remote_path: &str) -> Result<()> {
         let trimmed = remote_path.trim();
         ensure!(!trimmed.is_empty(), "remote_path cannot be empty");
 

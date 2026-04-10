@@ -21,7 +21,7 @@ pub(crate) fn normalize_ssh_config(config: &mut Config) {
 }
 
 pub(crate) fn is_valid_remote_cwd(cwd: &str) -> bool {
-    cwd.starts_with('/') || cwd == "~" || cwd.starts_with("~/")
+    crate::ssh::remote_path::SshRemotePath::parse(cwd, "remote cwd").is_ok()
 }
 
 pub(crate) fn normalize_remote_env_preview(
@@ -93,13 +93,6 @@ pub(crate) fn output_preview(output: &str) -> String {
     trimmed.chars().take(512).collect()
 }
 
-pub(crate) fn validate_remote_path<'a>(path: &'a str, field: &str) -> Result<&'a str> {
-    let path = path.trim();
-    ensure!(!path.is_empty(), "{field} cannot be empty");
-    ensure!(!path.contains('\0'), "{field} cannot contain NUL bytes");
-    Ok(path)
-}
-
 pub(crate) fn validate_remote_max_bytes(max_bytes: usize) -> Result<usize> {
     ensure!(
         max_bytes > 0,
@@ -124,7 +117,7 @@ pub(crate) fn validate_remote_write_size(content: &str) -> Result<()> {
 mod tests {
     use super::{
         is_valid_remote_cwd, normalize_remote_env_preview, parse_file_too_large_marker,
-        validate_remote_max_bytes, validate_remote_path, validate_remote_write_size,
+        validate_remote_max_bytes, validate_remote_write_size,
     };
     use serde_json::{Map, Value, json};
 
@@ -163,12 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_remote_path_and_sizes() {
-        assert_eq!(
-            validate_remote_path("/tmp/file", "field").unwrap(),
-            "/tmp/file"
-        );
-        assert!(validate_remote_path("", "field").is_err());
+    fn validates_remote_sizes() {
         assert!(validate_remote_max_bytes(0).is_err());
         assert!(validate_remote_write_size(&"a".repeat(256 * 1024 + 1)).is_err());
     }

@@ -1,10 +1,11 @@
+use crate::ssh::remote_path::{SshRemotePath, SshRemotePathKind};
 use anyhow::{Result, anyhow, bail, ensure};
 use chrono::Utc;
 
 use super::{
     SshService,
     context::SshMountRuntimeContext,
-    support::{remote_command_failed, validate_remote_path},
+    support::remote_command_failed,
     types::{SshMountRequest, SshUnmountRequest, SshUnmountResult},
 };
 
@@ -13,45 +14,6 @@ fn mount_description(description: Option<String>, remote_path: &str, target_path
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| format!("SSH mount: {remote_path} -> {target_path}"))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ParsedRemoteMountPath<'a> {
-    Absolute(&'a str),
-    Home,
-    HomeRelative(&'a str),
-}
-
-fn parse_mount_remote_path(remote_path: &str) -> Result<ParsedRemoteMountPath<'_>> {
-    let remote_path = validate_remote_path(remote_path, "ssh_mount remote_path")?;
-    if remote_path.starts_with('/') {
-        return Ok(ParsedRemoteMountPath::Absolute(remote_path));
-    }
-    if remote_path == "~" {
-        return Ok(ParsedRemoteMountPath::Home);
-    }
-    if let Some(rest) = remote_path.strip_prefix("~/") {
-        return Ok(ParsedRemoteMountPath::HomeRelative(rest));
-    }
-    if remote_path.starts_with('~') {
-        bail!(
-            "ssh_mount remote_path only supports ~ or ~/..., not user-relative paths: remote_path={remote_path}"
-        );
-    }
-
-    bail!(
-        "ssh_mount remote_path must be an absolute path or home-relative path: remote_path={remote_path}"
-    );
-}
-
-fn join_home_relative_remote_path(home: &str, rest: &str) -> String {
-    if rest.is_empty() {
-        return home.to_string();
-    }
-    if home == "/" {
-        return format!("/{rest}");
-    }
-    format!("{home}/{rest}")
 }
 
 impl SshService {
@@ -223,12 +185,13 @@ impl SshService {
         connection_id: &crate::ssh::SshConnectionId,
         remote_path: &str,
     ) -> Result<String> {
-        match parse_mount_remote_path(remote_path)? {
-            ParsedRemoteMountPath::Absolute(path) => Ok(path.to_string()),
-            ParsedRemoteMountPath::Home => self.resolve_remote_home_for_mount(connection_id).await,
-            ParsedRemoteMountPath::HomeRelative(rest) => {
+        let remote_path = SshRemotePath::parse(remote_path, "ssh_mount remote_path")?;
+        match remote_path.kind() {
+            SshRemotePathKind::Absolute(path) => Ok(path.to_string()),
+            SshRemotePathKind::Home => self.resolve_remote_home_for_mount(connection_id).await,
+            SshRemotePathKind::HomeRelative(_) => {
                 let home = self.resolve_remote_home_for_mount(connection_id).await?;
-                Ok(join_home_relative_remote_path(&home, rest))
+                Ok(remote_path.resolve_with_home(&home))
             }
         }
     }
@@ -275,53 +238,65 @@ impl SshService {
 #[cfg(test)]
 mod tests {
     use crate::Config;
+    use crate::ssh::remote_path::{SshRemotePath, SshRemotePathKind};
 
     use super::*;
 
     #[test]
     fn parse_mount_remote_path_accepts_absolute_and_home_relative_forms() {
         assert_eq!(
-            parse_mount_remote_path("/srv/project").unwrap(),
-            ParsedRemoteMountPath::Absolute("/srv/project")
+            SshRemotePath::parse("/srv/project", "field")
+                .unwrap()
+                .kind(),
+            SshRemotePathKind::Absolute("/srv/project")
         );
         assert_eq!(
-            parse_mount_remote_path("~").unwrap(),
-            ParsedRemoteMountPath::Home
+            SshRemotePath::parse("~", "field").unwrap().kind(),
+            SshRemotePathKind::Home
         );
         assert_eq!(
-            parse_mount_remote_path("~/workspace/sdc-skill").unwrap(),
-            ParsedRemoteMountPath::HomeRelative("workspace/sdc-skill")
+            SshRemotePath::parse("~/workspace/sdc-skill", "field")
+                .unwrap()
+                .kind(),
+            SshRemotePathKind::HomeRelative("workspace/sdc-skill")
         );
         assert_eq!(
-            parse_mount_remote_path("~/").unwrap(),
-            ParsedRemoteMountPath::HomeRelative("")
+            SshRemotePath::parse("~/", "field").unwrap().kind(),
+            SshRemotePathKind::HomeRelative("")
         );
     }
 
     #[test]
     fn parse_mount_remote_path_rejects_invalid_forms() {
-        let relative = parse_mount_remote_path("relative/path").expect_err("relative path");
-        assert!(format!("{relative:#}").contains("absolute path or home-relative path"));
+        let relative = SshRemotePath::parse("relative/path", "field").expect_err("relative path");
+        assert!(format!("{relative:#}").contains("absolute path, ~, or ~/..."));
 
-        let user_relative = parse_mount_remote_path("~alice/project").expect_err("user-relative");
+        let user_relative =
+            SshRemotePath::parse("~alice/project", "field").expect_err("user-relative");
         assert!(format!("{user_relative:#}").contains("only supports ~ or ~/..."));
 
-        let empty = parse_mount_remote_path(" ").expect_err("empty path");
+        let empty = SshRemotePath::parse(" ", "field").expect_err("empty path");
         assert!(format!("{empty:#}").contains("cannot be empty"));
     }
 
     #[test]
     fn join_home_relative_remote_path_preserves_literal_suffix() {
         assert_eq!(
-            join_home_relative_remote_path("/home/alice", ""),
+            SshRemotePath::parse("~/", "field")
+                .unwrap()
+                .resolve_with_home("/home/alice"),
             "/home/alice"
         );
         assert_eq!(
-            join_home_relative_remote_path("/home/alice", "../project"),
+            SshRemotePath::parse("~/../project", "field")
+                .unwrap()
+                .resolve_with_home("/home/alice"),
             "/home/alice/../project"
         );
         assert_eq!(
-            join_home_relative_remote_path("/", "workspace"),
+            SshRemotePath::parse("~/workspace", "field")
+                .unwrap()
+                .resolve_with_home("/"),
             "/workspace"
         );
     }

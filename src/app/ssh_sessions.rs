@@ -198,7 +198,7 @@ impl SshService {
             .as_deref()
             .is_some_and(|value| !is_valid_remote_cwd(value))
         {
-            bail!("remote cwd must be an absolute path or home-relative path: cwd={remote_cwd:?}");
+            bail!("remote cwd must be an absolute path, ~, or ~/...: cwd={remote_cwd:?}");
         }
 
         Ok(PreparedRemoteExecution {

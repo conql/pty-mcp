@@ -174,11 +174,15 @@ Constraint:
   - optional `capture_limit`: return `initial_output` using the same compact page model
   - if the script does not finish within that window, use `pty_wait` and `pty_read` with the returned `session_id`
 - `ssh_read_file`: read a UTF-8 text file from the remote host
+  - `path` accepts an absolute path, `~`, or `~/...`
   - optional `max_bytes`: allowed range `1..=524288`, default `131072`
 - `ssh_write_file`: write a UTF-8 text file to the remote host
+  - `path` accepts an absolute path, `~`, or `~/...`
   - `content` must be UTF-8 text and is capped at `262144` bytes
 - `ssh_list_dir`: list one remote directory level
+  - `path` accepts an absolute path, `~`, or `~/...`
 - `ssh_mkdir`: create a remote directory
+  - `path` accepts an absolute path, `~`, or `~/...`
 - `ssh_mkdir.create_parents`: create parent directories as needed
 - `ssh_mount`: mount a remote path locally through `sshfs`
 - `ssh_mount.target_path`: local mount target path
