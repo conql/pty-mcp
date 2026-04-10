@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use std::process::Output;
 
-use crate::ssh::{remote_path::SshRemotePath, runtime::shell_escape};
+use crate::ssh::{remote_path::SshRemotePath, shell::shell_escape};
 
 use super::{
     SshService,

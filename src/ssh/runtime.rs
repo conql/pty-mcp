@@ -19,6 +19,7 @@ use tokio::{
 use super::{
     model::{SshAuthKind, SshConnectionSummary, SshMountSummary, SshTarget, SshTunnelSummary},
     remote_path::SshRemotePath,
+    shell::shell_escape,
 };
 
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
@@ -655,13 +656,6 @@ fn build_ssh_session_plan(
         public_args,
         remote_command,
     }
-}
-
-pub(crate) fn shell_escape(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn build_remote_cwd_command(cwd: &str) -> Result<String> {

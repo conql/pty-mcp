@@ -1,11 +1,5 @@
+use crate::ssh::shell::shell_escape;
 use anyhow::{Result, bail, ensure};
-
-fn shell_escape(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SshRemotePathKind<'a> {
