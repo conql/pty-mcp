@@ -127,29 +127,8 @@ async fn list_tools_exposes_foundational_contract() -> anyhow::Result<()> {
         connect_schema["properties"]["auth_kind"]["enum"],
         serde_json::json!(["ssh_agent", "identity_file", "config_alias"])
     );
-    assert_eq!(
-        connect_schema["anyOf"],
-        serde_json::json!([
-            {
-                "required": ["host_alias"],
-                "properties": {
-                    "host_alias": {
-                        "type": "string",
-                        "minLength": 1
-                    }
-                }
-            },
-            {
-                "required": ["host"],
-                "properties": {
-                    "host": {
-                        "type": "string",
-                        "minLength": 1
-                    }
-                }
-            }
-        ])
-    );
+    assert!(connect_schema.get("anyOf").is_none());
+    assert!(connect_schema.get("allOf").is_none());
     assert_eq!(
         connect_schema["properties"]["port"]["minimum"],
         serde_json::json!(1)
